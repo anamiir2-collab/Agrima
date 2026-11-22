@@ -97,18 +97,25 @@
         delete sg.sizeMap;
         sg.sizes.sort((a, b) => (Number(a.size) || 0) - (Number(b.size) || 0));
         sg.total = sg.sizes.reduce((s, x) => s + x.qty, 0);
-        sg.totalWeight = sg.weight != null ? global.CALC.round6(sg.total * Number(sg.weight)) : null;
+        /* Excel column B is already a recorded weight total (kg), not
+           per-bale weight. Merged Excel cells store that value once on the
+           first row, so never multiply it by quantity or repeat it. */
+        sg.totalWeight = sg.weight != null ? global.CALC.round6(
+          g.rows.filter((row) => global.CALC.comboGroupWOf(row) === global.CALC.comboGroupW(sg.quality, sg.gsm, sg.weight))
+            .reduce((sum, row) => sum + (Number(row.weight) || 0), 0)
+        ) : null;
         return sg;
       });
       g.docGroups.sort((a, b) => String(a.family).localeCompare(String(b.family), 'ar') ||
         (Number(a.gsm) || 0) - (Number(b.gsm) || 0) ||
         ((a.weight == null ? -1 : a.weight) - (b.weight == null ? -1 : b.weight)));
       g.totalRolls = g.docGroups.reduce((s, sg) => s + sg.total, 0);
-      /* voucher weight = Σ (bales × roll weight) over rows that carry a weight */
-      const wKnown = g.docGroups.reduce((s, sg) => s + (sg.totalWeight || 0), 0);
-      const wUnknown = g.rows.filter((r) => r.weight == null || r.weight === '').length;
-      g.totalWeight = wKnown > 0 || wUnknown === 0 ? global.CALC.round6(wKnown) : null;
-      g.totalWeightPartial = wUnknown > 0 && wKnown > 0;
+      /* Sum the source weight cells exactly as recorded. Merged cells are
+         represented by one non-empty value in the imported row set. */
+      const wKnown = g.rows.reduce((sum, row) => sum + (Number(row.weight) || 0), 0);
+      g.totalWeight = g.rows.some((row) => row.weight != null && row.weight !== '')
+        ? global.CALC.round6(wKnown) : null;
+      g.totalWeightPartial = false;
       g.minId = g.rowIds.length ? Math.min(...g.rowIds) : 0;
     }
     return vouchers;
@@ -290,33 +297,29 @@
     if (!d) { host.innerHTML = '<div class="card error-card">لم يتم تحديد إذن — ارجع إلى أذون الصرف.</div>'; return; }
     const company = App.state.settings.companyName || (lang() ? 'إدارة المخزن' : 'Inventory Management');
 
-    /* One print table: quantity, size, GSM, product.
-       Weight is calculated independently for each GSM, then converted kg→ton. */
-    const printLines = new Map();
-    for (const sg of d.docGroups) {
-      const key = String(sg.family) + '||' + String(sg.gsm);
-      let group = printLines.get(key);
-      if (!group) {
-        group = { family: sg.family, gsm: sg.gsm, bales: 0, weightKg: 0, sizes: new Map() };
-        printLines.set(key, group);
-      }
-      for (const size of sg.sizes) {
-        const sizeKey = String(size.size);
-        const current = group.sizes.get(sizeKey) || { size: size.size, qty: 0 };
-        current.qty += Number(size.qty) || 0;
-        group.sizes.set(sizeKey, current);
-        group.bales += Number(size.qty) || 0;
-        if (sg.weight != null && sg.weight !== '') {
-          group.weightKg += (Number(size.qty) || 0) * Number(sg.weight);
-        }
-      }
+    /* Print details from the actual issue rows. The source weight column
+       contains pre-calculated totals; sum its populated cells once, grouped
+       by GSM, and never calculate quantity × weight. */
+    const printLineMap = new Map();
+    const printWeightMap = new Map();
+    for (const row of d.rows) {
+      const family = familyOf(row.quality);
+      const lineKey = [family, String(row.gsm), String(row.size)].join('||');
+      const line = printLineMap.get(lineKey) || { family, gsm: row.gsm, size: row.size, qty: 0 };
+      line.qty += Number(row.outQty) || 0;
+      printLineMap.set(lineKey, line);
+      const weightKey = [family, String(row.gsm)].join('||');
+      const weightGroup = printWeightMap.get(weightKey) || { family, gsm: row.gsm, bales: 0, weightKg: 0 };
+      weightGroup.bales += Number(row.outQty) || 0;
+      weightGroup.weightKg += Number(row.weight) || 0;
+      printWeightMap.set(weightKey, weightGroup);
     }
-    const printGroups = [...printLines.values()].sort((a, b) =>
+    const printGroups = [...printWeightMap.values()].sort((a, b) =>
+      String(a.family).localeCompare(String(b.family), 'ar') || (Number(a.gsm) || 0) - (Number(b.gsm) || 0));
+    const printRows = [...printLineMap.values()].sort((a, b) =>
       String(a.family).localeCompare(String(b.family), 'ar') ||
-      (Number(a.gsm) || 0) - (Number(b.gsm) || 0));
-    const printRows = printGroups.flatMap((group) =>
-      [...group.sizes.values()].sort((a, b) => (Number(a.size) || 0) - (Number(b.size) || 0))
-        .map((size) => [size.qty, size.size, group.gsm, group.family]));
+      (Number(a.gsm) || 0) - (Number(b.gsm) || 0) ||
+      (Number(a.size) || 0) - (Number(b.size) || 0));
     const printTable = `
       <table class="rp-table doc-issue-table">
         <thead><tr>
@@ -326,8 +329,8 @@
           <th>${lang() ? 'الصنف' : 'Product'}</th>
         </tr></thead>
         <tbody>${printRows.map((row) => `<tr>
-          <td>${fmtNum(row[0])}</td><td>${row[1] == null ? '—' : fmtNum(row[1])}</td>
-          <td>${row[2] == null ? '—' : fmtNum(row[2])}</td><td>${esc(row[3] || '—')}</td>
+          <td>${fmtNum(row.qty)}</td><td>${row.size == null ? '—' : fmtNum(row.size)}</td>
+          <td>${row.gsm == null ? '—' : fmtNum(row.gsm)}</td><td>${esc(row.family || '—')}</td>
         </tr>`).join('')}</tbody>
       </table>
       <table class="rp-table doc-gsm-totals">
@@ -345,10 +348,7 @@
 
     const totalBales = printGroups.reduce((sum, group) => sum + group.bales, 0);
     const totalWeightTons = printGroups.reduce((sum, group) => sum + group.weightKg, 0) / 1000;
-    const weightNote = d.rows.some((row) => row.weight == null || row.weight === '')
-      ? `<div class="doc-notes muted">${lang()
-        ? 'ملاحظة: الوزن بالطن تقديري ولا يشمل أي أسطر لا يتوفر لها وزن البكرة.'
-        : 'Note: tonnage is estimated and excludes lines without a recorded bale weight.'}</div>` : '';
+    const weightNote = '';
 
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('issuedoc'))} ${d.permitNo ? '— ' + esc(d.permitNo) : ''}</h2>

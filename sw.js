@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'inv-pwa-v13-auto-refresh';
+const CACHE = 'agrima-v7-rolls';
 
 const PRECACHE = [
   './',
@@ -20,6 +20,7 @@ const PRECACHE = [
   './js/transactions.js',
   './js/excel.js',
   './js/app.js',
+  './js/rolls.js',
   './js/inventory.js',
   './js/issuedocs.js',
   './js/reports.js',

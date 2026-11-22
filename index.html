@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>نظام إدارة رصيد المخزن</title>
+  <meta name="description" content="نظام محاسبة المخزن — رصيد، إضافات، صرف، تقارير طباعة، ونسخ احتياطي — يعمل بدون إنترنت">
+  <meta name="theme-color" content="#134E4A">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="assets/icons/favicon-64.png" type="image/png">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="css/style.css?v=v5-voucher-20261122">
+  <link rel="stylesheet" href="css/print.css?v=v5-voucher-20261122" media="print">
+</head>
+<body>
+  <div id="app" class="app-shell">
+
+    <!-- ===== Sidebar (desktop) ===== -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <img src="assets/icons/icon-192.png" alt="" class="brand-ic">
+        <div>
+          <div class="brand-name">نظام رصيد المخزن</div>
+          <div class="brand-sub">Inventory Balance System</div>
+        </div>
+      </div>
+      <nav class="side-nav">
+        <a class="nav-item" data-route="dashboard" href="#dashboard"><span class="nav-ic">🏠</span><span class="nav-txt" data-i18n="dashboard">الرئيسية</span></a>
+        <a class="nav-item" data-route="baker" href="#baker"><span class="nav-ic">🔄</span><span class="nav-txt" data-i18n="baker">حركة متابعة البكر</span></a>
+        <a class="nav-item" data-route="issuedocs" href="#issuedocs"><span class="nav-ic">🧾</span><span class="nav-txt" data-i18n="issuedocs">أذون الصرف</span></a>
+        <a class="nav-item" data-route="inventory" href="#inventory"><span class="nav-ic">📦</span><span class="nav-txt" data-i18n="inventory">رصيد المخزن</span></a>
+        <a class="nav-item" data-route="history" href="#history"><span class="nav-ic">🗂</span><span class="nav-txt" data-i18n="history">سجل الحركات</span></a>
+        <a class="nav-item" data-route="reports" href="#reports"><span class="nav-ic">🖨</span><span class="nav-txt" data-i18n="reports">التقارير والطباعة</span></a>
+        <a class="nav-item" data-route="products" href="#products"><span class="nav-ic">🏷</span><span class="nav-txt" data-i18n="products">إدارة الأصناف</span></a>
+        <a class="nav-item" data-route="backup" href="#backup"><span class="nav-ic">💾</span><span class="nav-txt" data-i18n="backup">النسخ الاحتياطي</span></a>
+        <a class="nav-item" data-route="settings" href="#settings"><span class="nav-ic">⚙️</span><span class="nav-txt" data-i18n="settings">الإعدادات</span></a>
+      </nav>
+      <div class="side-foot">
+        <div id="net-status" class="net-status"></div>
+        <div class="muted small">v5.0 — أذون صرف مجمّعة + التقرير — يعمل محليًا</div>
+      </div>
+    </aside>
+    <div class="nav-backdrop" id="nav-backdrop"></div>
+
+    <!-- ===== Main ===== -->
+    <main class="app-main">
+      <header class="topbar">
+        <button class="icon-btn nav-burger" id="nav-toggle" aria-label="القائمة">☰</button>
+        <div class="topbar-title" data-i18n="appName">نظام إدارة رصيد المخزن</div>
+        <div class="topbar-actions">
+          <button id="install-btn" class="btn btn-ghost install-btn" hidden>📲 <span data-i18n="install">تثبيت</span></button>
+          <button id="lang-switch" class="btn btn-ghost">EN</button>
+        </div>
+      </header>
+
+      <section id="view" class="view" aria-live="polite">
+        <!-- Loading screen: replaced by app content after boot, or by a
+             diagnostic error screen (with retry) if startup fails. -->
+        <div class="boot-loading" id="boot-loading">
+          <div class="spinner"></div>
+          <p>جاري التحميل…</p>
+          <p class="muted small" id="boot-status">فتح قاعدة البيانات المحلية…</p>
+        </div>
+      </section>
+
+      <!-- ===== Bottom nav (mobile) ===== -->
+      <nav class="bottom-nav">
+        <a class="nav-item" data-route="dashboard" href="#dashboard"><span class="nav-ic">🏠</span><span class="nav-txt" data-i18n="dashboard">الرئيسية</span></a>
+        <a class="nav-item" data-route="inventory" href="#inventory"><span class="nav-ic">📦</span><span class="nav-txt" data-i18n="inventory">الرصيد</span></a>
+        <a class="nav-item nav-fab" data-route="baker-add" href="#baker-add" aria-label="إضافة إنتاج"><span class="nav-ic">＋</span><span class="nav-txt" data-i18n="bakerAdd">إنتاج</span></a>
+        <a class="nav-item" data-route="issuedocs" href="#issuedocs"><span class="nav-ic">🧾</span><span class="nav-txt" data-i18n="issuedocs">أذون الصرف</span></a>
+        <a class="nav-item" data-route="history" href="#history"><span class="nav-ic">🗂</span><span class="nav-txt" data-i18n="history">السجل</span></a>
+      </nav>
+    </main>
+  </div>
+
+  <noscript>
+    <div style="padding:2rem;text-align:center;font-family:sans-serif">
+      هذا التطبيق يحتاج تفعيل JavaScript — This app requires JavaScript.
+    </div>
+  </noscript>
+
+  <!-- vendor libraries (local, offline-ready) -->
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/chart.umd.min.js"></script>
+
+  <!-- application modules (order matters) -->
+  <script src="js/calculations.js?v=v5-voucher-20261122"></script>
+  <script src="js/database.js?v=v5-voucher-20261122"></script>
+  <script src="js/ui.js?v=v5-voucher-20261122"></script>
+  <script src="js/transactions.js?v=v5-voucher-20261122"></script>
+  <script src="js/excel.js?v=v5-voucher-20261122"></script>
+  <script src="js/app.js?v=v5-voucher-20261122"></script>
+  <script src="js/inventory.js?v=v5-voucher-20261122"></script>
+  <script src="js/issuedocs.js?v=v5-voucher-20261122"></script>
+  <script src="js/reports.js?v=v5-voucher-20261122"></script>
+  <script src="js/backup.js?v=v5-voucher-20261122"></script>
+</body>
+</html>

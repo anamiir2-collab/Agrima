@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'inv-pwa-v12-recorded-weight';
+const CACHE = 'inv-pwa-v13-auto-refresh';
 
 const PRECACHE = [
   './',

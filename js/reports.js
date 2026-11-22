@@ -66,7 +66,7 @@
       }
       const customers = [...seen.keys()].sort((a, b) => a.localeCompare(b, 'ar'));
       const needs = {
-        warehouse: ['product', 'gsm', 'size', 'asof', 'mode'],
+        warehouse: ['product', 'gsm', 'size', 'asof'],
         balance: ['product', 'gsm', 'size'],
         additions: ['from', 'to', 'product', 'gsm', 'size', 'customer'],
         withdrawals: ['from', 'to', 'product', 'gsm', 'size', 'customer'],
@@ -81,11 +81,7 @@
       if (needs.includes('from')) add(`<label class="fl"><span>${t('from')}</span><input type="date" id="rf-from"></label>`);
       if (needs.includes('to')) add(`<label class="fl"><span>${t('to')}</span><input type="date" id="rf-to"></label>`);
       if (needs.includes('asof')) add(`<label class="fl"><span>${lang() ? 'حتى تاريخ (الرصيد حتى هذا اليوم)' : 'As of date'}</span><input type="date" id="rf-to"></label>`);
-      if (needs.includes('mode')) add(`<label class="fl"><span>${lang() ? 'نطاق الأرصدة' : 'Stock scope'}</span>
-        <select id="rf-mode">
-          <option value="all">${lang() ? 'كل الأرصدة — المتاح أولًا ثم الصفر والسالب' : 'All balances — available first'}</option>
-          <option value="avail">${lang() ? 'المتاح فقط' : 'Available stock only'}</option>
-        </select></label>`);
+      // تقرير المخزن يعرض الأرصدة الموجبة فقط.
       if (needs.includes('product') || needs.includes('productCombo'))
         add(`<label class="fl"><span>${t('quality')}</span><select id="rf-product"><option value="">${lang() ? '— اختر الصنف —' : '— select —'}</option>${families.map((p) => `<option>${esc(p)}</option>`).join('')}</select></label>`);
       if (needs.includes('productCombo')) {
@@ -158,70 +154,51 @@
            Balances are recomputed from the ORIGINAL transaction records up to
            the as-of date, so previously issued bales can never appear as
            available stock. Rows order: available → zero → negative. */
-        const mode = val('rf-mode') || 'all';
+        const mode = val('r      if (current === 'warehouse') {
+        /* مطابق لشيت «الرصيد»: تجميع حسب الصنف + GSM + المقاس فقط،
+           دون فصل المقاس الواحد حسب أوزان البكر التاريخية. */
         const scopeTx = to ? App.state.transactions.filter((r) => String(r.date || '') <= to)
           : App.state.transactions;
-        const balW = to ? global.CALC.computeBalancesByWeight(scopeTx) : App.state.balancesW;
-        const allRows = [...balW.values()].map((b) => ({
+        const balanceMap = global.CALC.computeBalances(scopeTx);
+        const rows = [...balanceMap.values()].map((b) => ({
           quality: b.quality, family: familyOf(b.quality), gsm: b.gsm,
-          weight: b.weight, size: b.size, add: b.add, out: b.out, net: b.net,
-          weightLabel: b.weight == null ? '—' : fmtNum(b.weight),
+          size: b.size, net: b.net,
           estWeight: global.CALC.productWeight(b.size, b.net, wf),
-        })).filter(filterCombo);
-        const availRows = allRows.filter((r) => r.net > 0);
-        const zeroRows = allRows.filter((r) => r.net === 0 && (r.add > 0 || r.out > 0));
-        const negRows = allRows.filter((r) => r.net < 0);
-        const rank = { avail: 0, zero: 1, neg: 2 };
-        const statusLabel = { avail: lang() ? 'متاح' : 'Available', zero: lang() ? 'صفر' : 'Zero', neg: lang() ? 'سالب' : 'Negative' };
-        const rows = (mode === 'avail' ? availRows : availRows.concat(zeroRows, negRows))
-          .map((r) => Object.assign(r, { status: r.net > 0 ? 'avail' : (r.net < 0 ? 'neg' : 'zero') }))
-          .sort((a, b) => rank[a.status] - rank[b.status] || byHierarchy(a, b));
-        const availNet = global.CALC.round6(availRows.reduce((s, r) => s + r.net, 0));
-        const availWeight = global.CALC.round6(availRows.reduce((s, r) => s + r.estWeight, 0));
+        })).filter((r) => r.net > 0).filter(filterCombo).sort((a, b) => {
+          const ia = CANON.indexOf(a.family), ib = CANON.indexOf(b.family);
+          const oa = ia < 0 ? CANON.length : ia, ob = ib < 0 ? CANON.length : ib;
+          return oa - ob || a.family.localeCompare(b.family, 'ar') ||
+            Number(a.gsm) - Number(b.gsm) || Number(a.size) - Number(b.size);
+        });
+        const availNet = global.CALC.round6(rows.reduce((sum, r) => sum + r.net, 0));
+        const availWeight = global.CALC.round6(rows.reduce((sum, r) => sum + r.estWeight, 0));
         const I = global.UI.ICON;
         model = {
           title,
-          subtitle: [fmtSubtitle(),
-            to
-              ? `${lang() ? 'الرصيد محتسب من الحركات الأصلية حتى تاريخ' : 'Balances from original records as of'}: ${fmtDate(to)}`
-              : (lang() ? 'الرصيد محتسب من كل الحركات الأصلية حتى اليوم' : 'Balances from all original records to date')],
+          subtitle: [fmtSubtitle(), to
+            ? (lang() ? 'الرصيد محسوب من الحركات الأصلية حتى تاريخ: ' : 'Balance as of: ') + fmtDate(to)
+            : (lang() ? 'الرصيد الحالي من جميع الحركات الأصلية' : 'Current balance from all original transactions')],
           cards: [
-            { icon: I.balance, num: fmtNum(availNet), label: lang() ? 'إجمالي البكر الموجودة بالمخزن' : 'Bales available in warehouse', accent: 'green' },
-            { icon: I.products, num: fmtNum(availWeight, 2), label: lang() ? 'إجمالي الوزن المتاح بالمخزن (كجم)' : 'Available weight (kg)', accent: 'teal' },
-            { icon: I.countAdd, num: fmtNum(availRows.length), label: lang() ? 'عدد المقاسات المتاحة' : 'Available sizes', accent: 'teal' },
-            { icon: I.countOut, num: fmtNum(zeroRows.length), label: lang() ? 'الأصناف التي وصلت إلى رصيد صفر' : 'Zero-stock items', accent: 'amber' },
+            { icon: I.balance, num: fmtNum(availNet), label: lang() ? 'إجمالي البكر الموجودة بالمخزن' : 'Bales in stock', accent: 'green' },
+            { icon: I.products, num: fmtNum(availWeight, 2), label: lang() ? 'إجمالي الوزن التقريبي (كجم)' : 'Estimated total weight (kg)', accent: 'teal' },
+            { icon: I.countAdd, num: fmtNum(rows.length), label: lang() ? 'عدد المقاسات الموجودة' : 'Sizes in stock', accent: 'teal' },
           ],
           summary: [
-            `${lang() ? 'إجمالي البكر الموجودة بالمخزن' : 'Total bales in warehouse'}: ${fmtNum(availNet)}`,
-            `${lang() ? 'إجمالي الوزن المتاح بالمخزن (كجم)' : 'Total available weight (kg)'}: ${fmtNum(availWeight, 2)}`,
-            `${lang() ? 'عدد المقاسات المتاحة' : 'Available sizes'}: ${fmtNum(availRows.length)}`,
-            `${lang() ? 'الأصناف التي وصلت إلى رصيد صفر' : 'Zero-stock items'}: ${fmtNum(zeroRows.length)}`,
-            negRows.length ? `${lang() ? 'أصناف برصيد سالب' : 'Negative-balance items'}: ${fmtNum(negRows.length)}` : '',
-            mode === 'avail' ? (lang() ? 'العرض: المتاح فقط' : 'Scope: available only')
-              : (lang() ? 'العرض: المتاح أولًا ثم الصفر والسالب' : 'Scope: available first, then zero and negative'),
-          ].filter(Boolean),
-          headers: [t('quality'), t('gsm'), t('rollWeight'), t('size'), t('add'), t('out'),
-            lang() ? 'البكر المتاحة' : 'Available bales',
-            `${lang() ? 'الوزن التقديري' : 'Est. weight'} (${t('kg')})`,
-            lang() ? 'الحالة' : 'Status'],
-          // Show each main product name once per consecutive group; list only its variants below it.
+            (lang() ? 'إجمالي البكر الموجودة بالمخزن: ' : 'Total bales in stock: ') + fmtNum(availNet),
+            (lang() ? 'إجمالي الوزن التقريبي (كجم): ' : 'Estimated total weight (kg): ') + fmtNum(availWeight, 2),
+            (lang() ? 'عدد المقاسات الموجودة: ' : 'Sizes in stock: ') + fmtNum(rows.length),
+          ],
+          headers: [t('quality'), t('gsm'), t('size'),
+            lang() ? 'رصيد المخزن (بكر)' : 'Warehouse balance (bales)',
+            lang() ? 'الوزن التقريبي (كجم)' : 'Estimated weight (kg)'],
           rows: rows.map((r, index) => [
             index === 0 || rows[index - 1].family !== r.family ? r.family : '',
-            fmtNum(r.gsm), r.weightLabel, fmtNum(r.size),
-            fmtNum(r.add), fmtNum(r.out), fmtNum(r.net), fmtNum(r.estWeight, 3),
-            statusLabel[r.status],
+            fmtNum(r.gsm), fmtNum(r.size), fmtNum(r.net), fmtNum(r.estWeight, 3),
           ]),
-          totalsRow: [lang() ? 'إجمالي المتاح' : 'Available total',
-            `${fmtNum(availRows.length)} ${lang() ? 'صنف' : 'items'}`, '', '', '', '',
-            fmtNum(availNet), fmtNum(availWeight, 3), ''],
-          keepZeros: true, // zero-stock rows are the point of this report
-        };
-      } else if (current === 'balance') {
-        /* full hierarchy: Product → GSM → Roll Weight → Size */
-        let rows = [...App.state.balancesW.values()].map((b) => ({
-          quality: b.quality, family: familyOf(b.quality), gsm: b.gsm,
-          weight: b.weight, size: b.size, net: b.net,
-          weightLabel: b.weight == null ? '—' : fmtNum(b.weight),
+          totalsRow: [lang() ? 'الإجمالي' : 'Total',
+            fmtNum(rows.length) + (lang() ? ' مقاس' : ' sizes'), '',
+            fmtNum(availNet), fmtNum(availWeight, 3)],
+        };b.weight),
           estWeight: global.CALC.productWeight(b.size, b.net, wf),
         })).filter(filterCombo).filter((r) => r.net !== 0);
         rows.sort((a, b) => {

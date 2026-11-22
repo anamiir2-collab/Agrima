@@ -67,10 +67,13 @@
       if (g.groupId && (!g.rows.every((r) => r.groupId === g.groupId) || groupHasAdd.has(g.groupId))) {
         g.groupId = null;
       }
-      /* dominant date (most rows; earliest wins a tie) */
-      const dates = new Map();
-      for (const r of g.rows) dates.set(r.date, (dates.get(r.date) || 0) + 1);
-      g.date = [...dates.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0][0];
+      /* Latest date wins when the same permit identity was reused.
+         Keep only rows belonging to that latest date; older reused-number
+         entries must not inflate the current voucher totals. */
+      g.date = g.rows.reduce((latest, row) =>
+        String(row.date || '') > String(latest || '') ? row.date : latest, '');
+      g.rows = g.rows.filter((row) => String(row.date || '') === String(g.date || ''));
+      g.rowIds = g.rows.map((row) => row.id).filter((id) => id != null);
       /* dominant notes */
       const notes = new Map();
       for (const r of g.rows) { const n = String(r.notes || '').trim(); if (n) notes.set(n, (notes.get(n) || 0) + 1); }
@@ -287,29 +290,65 @@
     if (!d) { host.innerHTML = '<div class="card error-card">لم يتم تحديد إذن — ارجع إلى أذون الصرف.</div>'; return; }
     const company = App.state.settings.companyName || (lang() ? 'إدارة المخزن' : 'Inventory Management');
 
-    const groupTables = d.docGroups.map((sg, i) => `
-      <div class="doc-group">
-        <div class="doc-group-title">${lang() ? 'مجموعة' : 'Group'} ${fmtNum(i + 1)} —
-          ${esc(sg.family)} | ${t('gsm')}: <strong>${sg.gsm == null ? '—' : fmtNum(sg.gsm)}</strong> |
-          ${t('rollWeight')}: <strong>${sg.weight == null ? '—' : fmtNum(sg.weight)}</strong></div>
-        <table class="rp-table">
-          <thead><tr><th>${t('size')} (${lang() ? 'سم' : 'cm'})</th><th>${lang() ? 'عدد البكر' : 'Bale count'}</th>
-            <th>${t('rollWeight')}</th><th>${t('voucherWeight')} (${t('kg')})</th></tr></thead>
-          <tbody>${sg.sizes.map((s) => `<tr><td>${s.size == null ? '—' : fmtNum(s.size)}</td><td>${fmtNum(s.qty)}</td>
-            <td>${sg.weight == null ? '—' : fmtNum(sg.weight)}</td>
-            <td>${sg.weight == null ? '—' : fmtNum(global.CALC.round6(s.qty * Number(sg.weight)), 3)}</td></tr>`).join('')}</tbody>
-          <tfoot><tr><td>${lang() ? 'إجمالي المجموعة' : 'Group total'}</td><td>${fmtNum(sg.total)}</td>
-            <td>${sg.weight == null ? '—' : fmtNum(sg.weight)}</td>
-            <td>${sg.totalWeight == null ? '—' : fmtNum(sg.totalWeight, 3)}</td></tr></tfoot>
-        </table>
-      </div>`).join('');
+    /* One print table: quantity, size, GSM, product.
+       Weight is calculated independently for each GSM, then converted kg→ton. */
+    const printLines = new Map();
+    for (const sg of d.docGroups) {
+      const key = String(sg.family) + '||' + String(sg.gsm);
+      let group = printLines.get(key);
+      if (!group) {
+        group = { family: sg.family, gsm: sg.gsm, bales: 0, weightKg: 0, sizes: new Map() };
+        printLines.set(key, group);
+      }
+      for (const size of sg.sizes) {
+        const sizeKey = String(size.size);
+        const current = group.sizes.get(sizeKey) || { size: size.size, qty: 0 };
+        current.qty += Number(size.qty) || 0;
+        group.sizes.set(sizeKey, current);
+        group.bales += Number(size.qty) || 0;
+        if (sg.weight != null && sg.weight !== '') {
+          group.weightKg += (Number(size.qty) || 0) * Number(sg.weight);
+        }
+      }
+    }
+    const printGroups = [...printLines.values()].sort((a, b) =>
+      String(a.family).localeCompare(String(b.family), 'ar') ||
+      (Number(a.gsm) || 0) - (Number(b.gsm) || 0));
+    const printRows = printGroups.flatMap((group) =>
+      [...group.sizes.values()].sort((a, b) => (Number(a.size) || 0) - (Number(b.size) || 0))
+        .map((size) => [size.qty, size.size, group.gsm, group.family]));
+    const printTable = `
+      <table class="rp-table doc-issue-table">
+        <thead><tr>
+          <th>${lang() ? 'العدد' : 'Quantity'}</th>
+          <th>${t('size')}</th>
+          <th>${t('gsm')}</th>
+          <th>${lang() ? 'الصنف' : 'Product'}</th>
+        </tr></thead>
+        <tbody>${printRows.map((row) => `<tr>
+          <td>${fmtNum(row[0])}</td><td>${row[1] == null ? '—' : fmtNum(row[1])}</td>
+          <td>${row[2] == null ? '—' : fmtNum(row[2])}</td><td>${esc(row[3] || '—')}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+      <table class="rp-table doc-gsm-totals">
+        <thead><tr>
+          <th>${lang() ? 'الجرام' : 'GSM'}</th>
+          <th>${lang() ? 'إجمالي عدد البكر' : 'Total bales'}</th>
+          <th>${lang() ? 'إجمالي الوزن (طن)' : 'Total weight (tons)'}</th>
+        </tr></thead>
+        <tbody>${printGroups.map((group) => `<tr>
+          <td>${group.gsm == null ? '—' : fmtNum(group.gsm)}</td>
+          <td>${fmtNum(group.bales)}</td>
+          <td>${fmtNum(group.weightKg / 1000, 4)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
 
-    const totalBales = d.totalRolls;
-    const totalWeight = d.totalWeight;
-    const weightNote = d.totalWeightPartial
+    const totalBales = printGroups.reduce((sum, group) => sum + group.bales, 0);
+    const totalWeightTons = printGroups.reduce((sum, group) => sum + group.weightKg, 0) / 1000;
+    const weightNote = d.rows.some((row) => row.weight == null || row.weight === '')
       ? `<div class="doc-notes muted">${lang()
-        ? 'ملاحظة: لا تشمل الأوزان أعلاه أسطرًا محفوظة بلا وزن بكرة.'
-        : 'Note: weights above exclude saved lines without a bale weight.'}</div>` : '';
+        ? 'ملاحظة: الوزن بالطن تقديري ولا يشمل أي أسطر لا يتوفر لها وزن البكرة.'
+        : 'Note: tonnage is estimated and excludes lines without a recorded bale weight.'}</div>` : '';
 
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('issuedoc'))} ${d.permitNo ? '— ' + esc(d.permitNo) : ''}</h2>
@@ -331,11 +370,11 @@
               <th>${t('date')}</th><td>${fmtDate(d.date)}</td>
             </tr></tbody>
           </table>
-          ${groupTables}
+          ${printTable}
           <table class="rp-table doc-total">
             <tbody>
               <tr><td class="doc-total-label">${t('totalRolls')}</td><td class="doc-total-num">${fmtNum(totalBales)} ${t('rolls')}</td></tr>
-              <tr><td class="doc-total-label">${t('voucherWeight')} (${t('kg')})</td><td class="doc-total-num">${totalWeight == null ? '—' : fmtNum(totalWeight, 3)}</td></tr>
+              <tr><td class="doc-total-label">${lang() ? 'إجمالي الوزن (طن)' : 'Total weight (tons)'}</td><td class="doc-total-num">${fmtNum(totalWeightTons, 4)}</td></tr>
             </tbody>
           </table>
           ${d.notes ? `<div class="doc-notes">${t('notes')}: ${esc(d.notes)}</div>` : ''}

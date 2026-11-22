@@ -150,11 +150,6 @@
       };
 
       if (current === 'warehouse') {
-        /* ====== التقرير — البكر المتاحة في المخزن أولًا ======
-           Balances are recomputed from the ORIGINAL transaction records up to
-           the as-of date, so previously issued bales can never appear as
-           available stock. Rows order: available → zero → negative. */
-        const mode = val('r      if (current === 'warehouse') {
         /* مطابق لشيت «الرصيد»: تجميع حسب الصنف + GSM + المقاس فقط،
            دون فصل المقاس الواحد حسب أوزان البكر التاريخية. */
         const scopeTx = to ? App.state.transactions.filter((r) => String(r.date || '') <= to)
@@ -198,7 +193,12 @@
           totalsRow: [lang() ? 'الإجمالي' : 'Total',
             fmtNum(rows.length) + (lang() ? ' مقاس' : ' sizes'), '',
             fmtNum(availNet), fmtNum(availWeight, 3)],
-        };b.weight),
+        };      } else if (current === 'balance') {
+        /* full hierarchy: Product → GSM → Roll Weight → Size */
+        let rows = [...App.state.balancesW.values()].map((b) => ({
+          quality: b.quality, family: familyOf(b.quality), gsm: b.gsm,
+          weight: b.weight, size: b.size, net: b.net,
+          weightLabel: b.weight == null ? '—' : fmtNum(b.weight),
           estWeight: global.CALC.productWeight(b.size, b.net, wf),
         })).filter(filterCombo).filter((r) => r.net !== 0);
         rows.sort((a, b) => {

@@ -1,20 +1,26 @@
 /* =========================================================================
-   app.js — التشغيل، الحالة العامة، التنقل، لوحة التحكم، نموذجي
-   «حركة متابعة البكر»: إضافة إنتاج + صرف للعملاء (أذون بترقيم مستقل)
+   app.js — التشغيل، الحالة العامة، التنقل، لوحة التحكم
+   Agrima — نظام إدارة المخزون والرولات والبكر والإنتاج وأذون الصرف
    -------------------------------------------------------------------------
-   Startup is defensive by design: every critical step is awaited inside
-   boot() which reports failures on the loading screen itself (never an
-   endless "جاري التحميل"). IndexedDB errors, offline mode and JS errors
-   are surfaced with distinct messages + a retry button.
+   قاعدة إلزامية: تسجيل البكر هو مصدر الإنتاج الجديد — لا يوجد نموذج
+   إضافة إنتاج يدوي مستقل (أُزيل من الواجهة والمسارات). سجل الإنتاج
+   للعرض والمراجعة فقط وتُضاف إليه الحركات تلقائيًا من تسجيل البكر.
 
    Routes:
-     #dashboard  لوحة التحكم
-     #baker      حركة متابعة البكر (بطاقتا العملية + قائمة الإضافات)
-     #baker-add  إضافة إنتاج (منتج وجرام ووزن واحد + مقاسات متعددة)
-     #baker-issue صرف للعملاء (إذن بمجموعات متعددة، ترقيم ضريبي/غير ضريبي)
-     #issuedocs  أذون الصرف (issuedocs.js) · #issuedoc عرض الإذن A4
-     #history    سجل الحركات · #addtx محرر الحركات المختلطة القديمة فقط
-   Legacy links: #additions → #baker · #withdrawals → #issuedocs
+     #dashboard   لوحة التحكم
+     #inventory   الرصيد الحالي
+     #reels-add   تسجيل البكر (إضافة رول جديد — مصدر الإنتاج)
+     #rolls       إدارة الرولات والبكر
+     #production  سجل الإنتاج (عرض ومراجعة)
+     #issuedocs   أذون الصرف · #issuedoc عرض الإذن A4 · #baker-issue نموذج الإذن
+     #outlog      سجل حركات الصرف
+     #customers   العملاء
+     #products    إدارة الأصناف
+     #reports     التقارير والطباعة
+     #import      الاستيراد والتصدير
+     #backup      النسخ الاحتياطي · #settings الإعدادات
+     #history     سجل الحركات الكامل (توافق) · #addtx محرر الحركات المختلطة
+   Legacy links: #additions → #rolls · #baker → #rolls · #baker-add → #reels-add
    ========================================================================= */
 (function (global) {
   'use strict';
@@ -25,6 +31,7 @@
       ready: false,
       products: [],
       transactions: [],
+      permits: [],
       balances: new Map(),
       balancesW: new Map(), /* roll-weight dimension: product→gsm→weight→size */
       settings: { companyName: '', lang: 'ar', weightFactor: 7.5 },
@@ -120,12 +127,14 @@
 
   /* ---------------- data loading ---------------- */
   async function loadAll() {
-    const [products, transactions] = await Promise.all([
+    const [products, transactions, permits] = await Promise.all([
       global.DB.getAll('products'),
       global.DB.getAll('transactions'),
+      global.DB.getAll('permits'),
     ]);
     App.state.products = products;
     App.state.transactions = transactions;
+    App.state.permits = permits;
     App.state.balances = global.CALC.computeBalances(transactions);
     App.state.balancesW = global.CALC.computeBalancesByWeight(transactions);
     App.state.settings.companyName = await global.DB.getSetting('companyName', '');
@@ -157,10 +166,15 @@
   }
   App.balanceBy = balanceBy;
 
-  /* ---------------- router ---------------- */
-  /* old links keep working: additions/withdrawals were reorganized into
-     حركة متابعة البكر and أذون الصرف */
-  const ROUTE_REDIRECT = { additions: 'baker', withdrawals: 'issuedocs' };
+  /* ---------------- router ----------------
+     المسارات القديمة تعمل جميعها: حركة متابعة البكر أصبحت إدارة الرولات
+     والبكر، وإضافة الإنتاج اليدوية أُزيلت (تسجيل البكر هو المصدر الوحيد) */
+  const ROUTE_REDIRECT = {
+    additions: 'rolls',
+    withdrawals: 'issuedocs',
+    baker: 'rolls',
+    'baker-add': 'reels-add',
+  };
   let currentRoute = 'dashboard';
   function render() {
     const view = App.views[currentRoute] || App.views.dashboard;
@@ -473,197 +487,11 @@
      SECTION: حركة متابعة البكر
      ======================================================================= */
 
-  /* ---------- A. إضافة إنتاج ---------- */
-  function bakerAddForm(host, editGroup) {
-    const isEdit = !!editGroup;
-    const existing = editGroup || null;
-    const ar = () => UI.getLang() === 'ar';
-    const families = familyOptions();
-    const weights = knownWeights();
-
-    host.innerHTML = `
-      <div class="page-head"><h2>${isEdit
-        ? (ar() ? 'تعديل إضافة إنتاج' : 'Edit production entry')
-        : `${t('bakerAdd')} — ${t('baker')}`}</h2>
-        <div class="head-actions"><button class="btn btn-ghost" id="ba-back">← ${t('baker')}</button></div></div>
-      <div class="card form-card">
-        <p class="muted small form-sub">${ar()
-          ? 'الإنتاج يُسجَّل باسم «الإنتاج»: اختر الصنف والجرام ووزن البكرة مرة واحدة لكل المجموعة، ثم أضف أسطر المقاسات تحت نفس الرأس. لا يوجد هنا تصنيف ضريبي أو رقم إذن — تلك لعاملي الصرف فقط.'
-          : 'Production is booked to «Production»: pick product, GSM and roll weight once for the whole group, then add size rows under the same header. Tax classification and document numbers belong to the issue form only.'}</p>
-        <form id="ba-form" novalidate>
-          <div class="form-grid">
-            <label class="field"><span>${t('date')} *</span>
-              <input type="date" id="ba-date" required value="${esc(existing ? existing.date : todayISO())}"></label>
-            <label class="field"><span>${t('quality')} *</span>
-              <select id="ba-quality" required>
-                <option value="">— ${ar() ? 'اختر الصنف' : 'select product'} —</option>
-                ${families.map((family) => `<option value="${esc(family)}" ${existing && productFamily(existing.quality) === family ? 'selected' : ''}>${esc(family)}</option>`).join('')}
-              </select></label>
-            <label class="field"><span>${t('gsm')} *</span>
-              <input type="number" id="ba-gsm" min="1" step="any" list="ba-gsm-list" placeholder="125" value="${esc(existing && existing.gsm != null ? existing.gsm : '')}">
-              <datalist id="ba-gsm-list">${knownGsms(null).map((g) => `<option value="${esc(g)}"></option>`).join('')}</datalist></label>
-            <label class="field"><span>${t('rollWeight')} *</span>
-              <input type="number" id="ba-weight" min="0.001" step="0.001" list="ba-w-list" placeholder="500"
-                value="${esc(existing && existing.rows[0].weight != null ? existing.rows[0].weight : '')}">
-              <datalist id="ba-w-list">${weights.map((w) => `<option value="${esc(w)}"></option>`).join('')}</datalist></label>
-            <label class="field field-wide"><span>${t('notes')}</span>
-              <input type="text" id="ba-notes" value="${esc(existing ? existing.notes : '')}"></label>
-          </div>
-          <section class="field field-wide" id="ba-sizes-section">
-            <div class="sz-head" aria-hidden="true">
-              <span>${t('size')} (${ar() ? 'سم' : 'cm'})</span>
-              <span>${ar() ? 'عدد البكر' : 'Bale count'}</span>
-              <span></span>
-            </div>
-            <div id="ba-size-rows"></div>
-            <button type="button" class="btn btn-ghost" id="ba-add-row">+ ${t('addSizeRow')}</button>
-          </section>
-          <div class="form-hint" id="ba-hint"></div>
-          <div class="form-error" id="ba-error" role="alert"></div>
-          <div class="form-actions">
-            <button type="submit" class="btn btn-primary">${t('save')}</button>
-            <button type="button" class="btn btn-ghost" id="ba-cancel">${t('cancel')}</button>
-          </div>
-        </form>
-      </div>`;
-
-    const form = host.querySelector('#ba-form');
-    const qSel = host.querySelector('#ba-quality');
-    const gsmIn = host.querySelector('#ba-gsm');
-    const weightIn = host.querySelector('#ba-weight');
-    const rowsHost = host.querySelector('#ba-size-rows');
-    host.querySelector('#ba-back').addEventListener('click', () => navigate('baker'));
-
-    const addSizeRow = (sizeValue = '', qtyValue = '') => {
-      const row = document.createElement('div');
-      row.className = 'sz-row';
-      row.innerHTML =
-        '<input class="line-size" type="number" min="1" step="any" placeholder="100" aria-label="size">' +
-        '<input class="line-qty" type="number" min="1" step="1" placeholder="0" aria-label="quantity">' +
-        '<button type="button" class="btn btn-ghost remove-size-row" aria-label="remove">×</button>' +
-        '<div class="line-balance small"></div>';
-      row.querySelector('.line-size').value = sizeValue == null ? '' : sizeValue;
-      row.querySelector('.line-qty').value = qtyValue == null ? '' : qtyValue;
-      rowsHost.appendChild(row);
-      row.querySelector('.remove-size-row').addEventListener('click', () => {
-        if (rowsHost.querySelectorAll('.sz-row').length === 1) {
-          row.querySelector('.line-size').value = '';
-          row.querySelector('.line-qty').value = '';
-        } else row.remove();
-        updateHint();
-      });
-      row.querySelector('.line-size').addEventListener('input', () => { updateLineHint(); updateHint(); });
-      row.querySelector('.line-qty').addEventListener('input', () => { updateHint(); });
-      return row;
-    };
-
-    const updateLineHint = () => {
-      for (const row of rowsHost.querySelectorAll('.sz-row')) {
-        const size = Number(row.querySelector('.line-size').value);
-        const q = qSel.value, gsm = Number(gsmIn.value), w = weightIn.value === '' ? null : Number(weightIn.value);
-        const hint = row.querySelector('.line-balance');
-        if (q && gsm > 0 && size > 0) {
-          const bal = balanceBy(q, gsm, w, size);
-          hint.textContent = (ar() ? 'الرصيد الحالي لهذا الوزن: ' : 'Balance in this weight bucket: ') + fmtNum(bal.net);
-        } else hint.textContent = '';
-      }
-    };
-
-    host.querySelector('#ba-add-row').addEventListener('click', () => { addSizeRow(); updateHint(); });
-    if (isEdit && existing) {
-      existing.rows.forEach((r) => addSizeRow(r.size, r.addQty || 0));
-    } else {
-      addSizeRow();
-    }
-    const refreshHints = () => rowsHost.querySelectorAll('.sz-row .line-size').forEach((i) => i.dispatchEvent(new Event('input')));
-    qSel.addEventListener('change', refreshHints);
-    gsmIn.addEventListener('input', refreshHints);
-    weightIn.addEventListener('input', refreshHints);
-
-    function updateHint() {
-      const hint = host.querySelector('#ba-hint');
-      if (!hint) return;
-      const lines = readLines();
-      if (!lines.length) { hint.innerHTML = ''; return; }
-      const total = global.CALC.round6(lines.reduce((s, l) => s + l.qty, 0));
-      hint.innerHTML = (ar() ? 'إجمالي البكر المضافة: ' : 'Total bales added: ') + `<strong>${fmtNum(total)}</strong>`;
-    }
-
-    host.querySelector('#ba-cancel').addEventListener('click', () => navigate('baker'));
-
-    function readLines() {
-      return [...host.querySelectorAll('.sz-row')].map((row) => ({
-        size: Number(row.querySelector('.line-size').value),
-        qty: Number(row.querySelector('.line-qty').value),
-      })).filter((l) => Number.isFinite(l.size) && l.size > 0);
-    }
-
-    form.addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const errBox = host.querySelector('#ba-error');
-      errBox.textContent = '';
-      const quality = qSel.value.trim();
-      const gsm = gsmIn.value ? Number(gsmIn.value) : null;
-      const weight = weightIn.value === '' ? null : Number(weightIn.value);
-      const header = {
-        date: host.querySelector('#ba-date').value,
-        quality, gsm, weight,
-        notes: host.querySelector('#ba-notes').value.trim(),
-        source: isEdit ? (existing.source || 'manual') : 'manual',
-      };
-      const lines = readLines();
-
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(header.date) || !quality || !Number.isFinite(gsm) || gsm <= 0 ||
-          !Number.isFinite(weight) || weight <= 0) {
-        errBox.textContent = ar()
-          ? 'أكمل التاريخ والصنف والجرام ووزن البكرة (أكبر من صفر).'
-          : 'Complete date, product, GSM and bale weight (greater than zero).';
-        return;
-      }
-      if (!lines.length || lines.some((l) => !Number.isFinite(l.qty) || l.qty <= 0)) {
-        errBox.textContent = ar()
-          ? 'أدخل مقاسًا صحيحًا وكمية أكبر من صفر لكل سطر.'
-          : 'Enter a valid size and a quantity greater than zero in every row.';
-        return;
-      }
-      const seen = new Set();
-      for (const l of lines) {
-        if (seen.has(String(l.size))) {
-          errBox.textContent = ar()
-            ? `المقاس ${l.size} مكرر — اجمع كميته في سطر واحد.`
-            : `Size ${l.size} is repeated — combine its quantity into one row.`;
-          return;
-        }
-        seen.add(String(l.size));
-      }
-
-      try {
-        if (isEdit) {
-          const pending = lines.map((l) => ({
-            date: header.date, quality, gsm, size: l.size,
-            customer: 'الإنتاج', permitNo: '', addQty: l.qty, outQty: 0,
-            weight, settlement: '', notes: header.notes, source: header.source,
-          }));
-          await global.TX.replaceMovement(existing, pending);
-          toast(ar() ? 'تم تحديث الحركة وتحديث الرصيد تلقائيًا' : 'movement updated, balances recalculated', 'ok');
-        } else {
-          await global.TX.saveProduction(header, lines);
-          toast(ar() ? `تم تسجيل ${fmtNum(lines.reduce((s, l) => s + l.qty, 0))} بكرة إنتاج وتحديث الرصيد`
-            : 'production saved and balances updated', 'ok');
-        }
-        await refresh();
-        navigate('baker');
-      } catch (saveError) {
-        if (saveError && saveError.type === 'validation') {
-          errBox.innerHTML = saveError.errors.map((x) => `• ${esc(x.msg)}`).join('<br>');
-        } else {
-          errBox.textContent = String(saveError.message || saveError);
-          console.error(saveError);
-        }
-      }
-    });
-  }
-
+  /* ================= إضافة الإنتاج اليدوية أُزيلت =================
+     تسجيل البكر (#reels-add في rolls.js) هو المصدر الوحيد للإنتاج الجديد:
+     حفظ الرول يُنشئ حركات الإنتاج تلقائيًا ويحدث الرصيد. نموذج «إضافة
+     إنتاج» المستقل حُذف من الواجهة والمسارات (#baker-add يتحول تلقائيًا)،
+     والحركات التاريخية القديمة وسجل الإنتاج والتقارير محفوظة كما هي. */
   /* ---------- B. صرف للعملاء (إذن بمجموعات + ترقيم مستقل) ---------- */
   function bakerIssueForm(host, editGroup) {
     const isEdit = !!editGroup;
@@ -970,32 +798,8 @@
     });
   }
 
-  /* ---------- حركة متابعة البكر — hub: بطاقتا العملية + قائمة الإضافات ---------- */
-  function bakerHub(host) {
-    const ar = () => UI.getLang() === 'ar';
-    host.innerHTML = `
-      <div class="page-head"><h2>${t('baker')}</h2></div>
-      <div class="op-grid">
-        <button class="op-card op-add" id="op-add">
-          <span class="op-ic">➕</span>
-          <span class="op-title">${t('bakerAdd')}</span>
-          <span class="op-desc">${ar() ? 'تسجيل الإنتاج الجديد: صنف وجرام ووزن بكرة واحد مع مقاسات متعددة — يزيد الرصيد مباشرة.' : 'Record new production: one product/GSM/bale weight with multiple size rows — increases stock immediately.'}</span>
-        </button>
-        <button class="op-card op-issue" id="op-issue">
-          <span class="op-ic">🧾</span>
-          <span class="op-title">${t('bakerIssue')}</span>
-          <span class="op-desc">${t('issueNote')}</span>
-        </button>
-      </div>
-      <div id="baker-table"></div>`;
-    host.querySelector('#op-add').addEventListener('click', () => { App.pendingEdit = null; navigate('baker-add'); });
-    host.querySelector('#op-issue').addEventListener('click', () => { App.pendingEdit = null; navigate('baker-issue'); });
-    txTable(host.querySelector('#baker-table'), {
-      title: ar() ? 'حركات الإضافة المسجلة' : 'Recorded production entries',
-      filter: (r) => (Number(r.addQty) || 0) > 0, preset: 'add', hideAdd: true,
-    });
-  }
-
+  /* قسم «حركة متابعة البكر» القديم حُوّل إلى «إدارة الرولات والبكر» (#rolls)
+     و«تسجيل البكر» (#reels-add) — انظر rolls.js */
   /* =======================================================================
      shared table renderer for movement lists
      ======================================================================= */
@@ -1096,11 +900,24 @@
             ? App.buildGroups(App.state.transactions.filter((r) => r.groupId === group.groupId))[0]
             : group;
           if (act === 'edit') {
+            /* حركات إنتاج مصدرها تسجيل البكر: التعديل من تفاصيل الرول فقط */
+            if (full.rows[0] && full.rows[0].source === 'reels') {
+              toast(lang ? 'حركة إنتاج من تسجيل البكر — التعديل من «إدارة الرولات والبكر» عبر تفاصيل الرول' : 'Reel-sourced production — edit from roll details', 'info');
+              if (App.openRollDetails) App.openRollDetails(full.rows[0].rollNo);
+              return;
+            }
+            /* أذون التطبيق (P:groupId): التعديل من نموذج الإذن */
+            if (full.groupId && String(full.groupId).startsWith(global.TX.PERMIT_GROUP_PREFIX)) {
+              const pid = String(full.groupId).slice(global.TX.PERMIT_GROUP_PREFIX.length);
+              const v = App.collectVouchers(App.state.transactions, App.state.permits)
+                .find((x) => x.permitId === pid);
+              if (v) { App.pendingEdit = v; navigate('baker-issue'); return; }
+            }
             if (!full.groupId) { App.openLegacyEditModal(full.rows[0]); return; }
             const hasAdd = full.add > 0, hasOut = full.out > 0;
             if (hasAdd && hasOut) { App.pendingEdit = { type: 'mixed', group: full }; navigate('addtx'); }
             else if (hasOut) { App.pendingEdit = { type: 'issue', group: full }; navigate('baker-issue'); }
-            else { App.pendingEdit = { type: 'production', group: full }; navigate('baker-add'); }
+            else { toast(lang ? 'حركة الإنتاج تُعد من «إدارة الرولات والبكر»' : '', 'info'); }
           } else if (act === 'del') {
             const ok = await confirmDialog({
               title: lang ? 'حذف حركة' : 'Delete movement',
@@ -1111,6 +928,10 @@
                 : `Delete this movement permanently and recalculate balances?\n${full.quality} / ${full.gsm} — ${full.sizesLabel}`,
               danger: true, extra: lang ? `<code>${esc(full.date)} — ${esc(canonicalCustomer(full.customer) || '')}</code>` : '',
             });
+            if (full.rows[0] && full.rows[0].source === 'reels') {
+              toast(lang ? 'حركة إنتاج من تسجيل البكر — الحذف من تفاصيل الرول في «إدارة الرولات والبكر»' : 'Delete reel-sourced production from roll details', 'err');
+              return;
+            }
             if (ok) {
               await global.TX.deleteMovement(full);
               toast(lang ? 'تم الحذف وتحديث الرصيد' : 'deleted, balances updated', 'ok');
@@ -1248,18 +1069,33 @@
       stockTotal += net;
       weightTotal += global.CALC.productWeight(p.size, net, App.state.settings.weightFactor);
     }
-    const nProduction = buildGroups(tx.filter((r) => (Number(r.addQty) || 0) > 0)).length;
-    /* vouchers (one per permitNo/classification/customer), not raw rows */
-    const nDocs = App.collectIssueDocs(tx).length;
+    const nProduction = buildGroups(tx.filter((r) => (Number(r.addQty) || 0) > 0 && r.source !== 'reels')).length;
+    const nReelMovements = tx.filter((r) => r.source === 'reels').length;
+    /* أذون التطبيق (مسودات + معتمدة) + الأذون المشتقة من الحركات */
+    const vouchers = App.collectVouchers(tx, App.state.permits);
+    const nDocs = vouchers.filter((v) => v.status === 'approved').length;
+    const nDrafts = vouchers.filter((v) => v.status === 'draft').length;
     const I = global.UI.ICON;
     const cards = [
       { icon: I.balance, num: fmtNum(stockTotal), label: `${t('totalBalance')} (${t('rolls')})`, accent: 'green' },
       { icon: I.products, num: fmtNum(products.length), label: t('totalProducts'), accent: 'teal' },
-      { icon: I.countAdd, num: fmtNum(nProduction), label: t('countAdd'), accent: 'teal' },
-      { icon: I.countOut, num: fmtNum(nDocs), label: t('countOut'), accent: 'amber' },
+      { icon: I.countAdd, num: fmtNum(nProduction + nReelMovements), label: lang ? 'حركات الإنتاج (منها البكر المسجلة)' : 'Production movements', accent: 'teal' },
+      { icon: I.countOut, num: fmtNum(nDocs + nDrafts), label: `${t('countOut')} (${lang ? 'معتمدة' : 'approved'}${nDrafts ? ` + ${fmtNum(nDrafts)} ${lang ? 'مسودة' : 'drafts'}` : ''})`, accent: 'amber' },
       { icon: I.add, num: fmtNum(g.add), label: lang ? 'إجمالي الإضافات للإنتاج' : 'Total production additions', accent: 'green' },
       { icon: I.out, num: fmtNum(g.out), label: lang ? 'إجمالي الصرف للعملاء' : 'Total customer withdrawals', accent: 'amber' },
     ];
+    /* إحصاءات الرولات والبكر (متتبعة فقط) */
+    global.DB.getAll('reels').then((reels) => {
+      const box = host.querySelector('#dash-reels-line');
+      if (!box) return;
+      const avail = reels.filter((r) => r.status === 'available');
+      const disp = reels.filter((r) => r.status === 'dispatched');
+      const undef = reels.filter((r) => r.status === 'undefined');
+      const wAvail = avail.reduce((s, r) => s + (Number(r.weight) || 0), 0);
+      box.innerHTML = lang
+        ? `البكر المتتبعة: <strong>${fmtNum(reels.length)}</strong> — متاحة: <strong>${fmtNum(avail.length)}</strong> بوزن فعلي <strong>${fmtNum(wAvail, 3)}</strong> كجم — مصروفة: <strong>${fmtNum(disp.length)}</strong> — غير محددة (مستوردة تاريخية): <strong>${fmtNum(undef.length)}</strong>`
+        : `Tracked reels: ${reels.length} — available: ${avail.length} (${wAvail.toFixed(3)} kg) — dispatched: ${disp.length} — undefined (imported): ${undef.length}`;
+    }).catch(() => {});
 
     /* inventory by product (2 canonical families + totals) */
     const famRows = CANON_FAMILIES.map((family) => {
@@ -1284,8 +1120,9 @@
       <div class="page-head"><h2>${lang ? 'لوحة التحكم' : 'Dashboard'}</h2>
         <div class="head-actions">
           ${tx.length === 0 ? `<button class="btn btn-primary" id="btn-import-dash">${t('importExcel')}</button>` : ''}
-          <button class="btn btn-primary" id="btn-new-dash">+ ${t('bakerAdd')}</button>
+          <button class="btn btn-primary" id="btn-new-dash">+ ${lang ? 'تسجيل بكر' : 'Register reels'}</button>
         </div></div>
+      <div class="card weight-line" id="dash-reels-line"></div>
       <div class="stats-grid">
         ${cards.map((c) => `<div class="stat-card accent-${c.accent}">
           <div class="stat-icon">${c.icon}</div>
@@ -1339,7 +1176,7 @@
     if (imp) imp.addEventListener('click', () => global.BACKUP.openImportDialog());
     host.querySelector('#btn-new-dash').addEventListener('click', () => {
       App.pendingEdit = null;
-      navigate('baker-add');
+      navigate('reels-add');
     });
 
     drawCharts(host);
@@ -1415,12 +1252,16 @@
 
   /* ---------------- view registrations ---------------- */
   App.registerView('dashboard', renderDashboard);
-  App.registerView('baker', bakerHub);
-  App.registerView('baker-add', (host) => {
-    const pending = App.pendingEdit; App.pendingEdit = null;
-    const edit = pending && pending.group ? pending.group : (pending || null);
-    bakerAddForm(host, edit);
-  });
+  /* سجل الإنتاج — للعرض والمراجعة فقط (الإنتاج يُسجل من تسجيل البكر تلقائيًا) */
+  App.registerView('production', (host) => txTable(host, {
+    title: global.UI.getLang() === 'ar' ? 'سجل الإنتاج (عرض ومراجعة — الإنتاج يُسجل من تسجيل البكر)' : 'Production log (view only)',
+    filter: (r) => (Number(r.addQty) || 0) > 0, preset: 'add', hideAdd: true,
+  }));
+  /* سجل حركات الصرف */
+  App.registerView('outlog', (host) => txTable(host, {
+    title: global.UI.getLang() === 'ar' ? 'سجل حركات الصرف' : 'Withdrawal movements log',
+    filter: (r) => (Number(r.outQty) || 0) > 0, preset: 'out', hideAdd: true,
+  }));
   App.registerView('baker-issue', (host) => {
     const pending = App.pendingEdit; App.pendingEdit = null;
     const edit = pending && pending.group ? pending.group : (pending || null);
@@ -1434,11 +1275,171 @@
     txForm(host, edit, preset);
   });
   App.registerView('history', (host) => txTable(host, {
-    title: global.UI.getLang() === 'ar' ? 'سجل الحركات' : 'Transaction history',
-    filter: () => true, preset: null,
-    addLabel: global.UI.getLang() === 'ar' ? 'حركة متابعة البكر' : 'Blank-roll movement',
-    addTarget: 'baker',
+    title: global.UI.getLang() === 'ar' ? 'سجل الحركات الكامل' : 'Full transaction history',
+    filter: () => true, preset: null, hideAdd: true,
   }));
+
+  /* ---------------- العملاء ---------------- */
+  function renderCustomers(host) {
+    const ar2 = () => UI.getLang() === 'ar';
+    host.innerHTML = `
+      <div class="page-head"><h2>${ar2() ? 'العملاء' : 'Customers'}</h2>
+        <div class="head-actions"><button class="btn btn-primary" id="cu-add">+ ${ar2() ? 'عميل جديد' : 'New customer'}</button></div></div>
+      <div class="card filters"><input type="text" id="cu-search" placeholder="${ar2() ? 'بحث باسم العميل…' : 'Search…'}"></div>
+      <div class="card table-wrap"><table class="data-table">
+        <thead><tr><th>${ar2() ? 'اسم العميل' : 'Customer'}</th>
+          <th class="num">${ar2() ? 'عدد الأذون' : 'Permits'}</th>
+          <th class="num">${ar2() ? 'إجمالي الصرف (بكر)' : 'Total issued (bales)'}</th>
+          <th>${ar2() ? 'المصدر' : 'Source'}</th><th>${t('actions')}</th></tr></thead>
+        <tbody id="cu-rows"></tbody></table></div>`;
+    let rows = [];
+    async function load() {
+      const [saved, permits] = await Promise.all([
+        global.DB.getAll('customers'), Promise.resolve(App.state.permits || []),
+      ]);
+      const stats = new Map(); /* name → {permits, qty} */
+      for (const r of App.state.transactions) {
+        if ((Number(r.outQty) || 0) <= 0) continue;
+        const name = App.canonicalCustomer(r.customer) || '';
+        if (!name || name === 'الإنتاج') continue;
+        const s = stats.get(name) || { permits: new Set(), qty: 0 };
+        if (r.permitNo) s.permits.add((r.settlement || '') + '|' + r.permitNo);
+        s.qty += Number(r.outQty) || 0;
+        stats.set(name, s);
+      }
+      for (const p of permits) {
+        const s = stats.get(p.customer) || { permits: new Set(), qty: 0 };
+        if (p.status === 'approved') {
+          s.permits.add((p.cls || '') + '|' + p.permitNo);
+          const tot = (p.totals && p.totals.rolls) || 0;
+          /* الكميات محسوبة أصلا من حركات الاعتماد — لا نجمع مرتين */
+        }
+        stats.set(p.customer, s);
+      }
+      const names = new Set([...stats.keys()]);
+      for (const c of saved) names.add(c.name);
+      rows = [...names].map((name) => {
+        const s = stats.get(name) || { permits: new Set(), qty: 0 };
+        const rec = saved.find((c) => c.name === name);
+        return { name, permits: s.permits.size, qty: s.qty, rec };
+      }).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+      draw();
+    }
+    function draw() {
+      const q = host.querySelector('#cu-search').value.trim().toLowerCase();
+      const list = q ? rows.filter((r) => r.name.toLowerCase().includes(q)) : rows;
+      host.querySelector('#cu-rows').innerHTML = list.length ? list.map((r) => `<tr>
+        <td data-label="${ar2() ? 'العميل' : 'Customer'}">${esc(r.name)}</td>
+        <td class="num">${fmtNum(r.permits)}</td>
+        <td class="num">${fmtNum(r.qty)}</td>
+        <td>${r.rec ? `<span class="badge">${ar2() ? 'محفوظ' : 'saved'}</span>` : `<span class="badge badge-multi">${ar2() ? 'من الحركات' : 'from history'}</span>`}</td>
+        <td class="actions-cell">
+          ${r.rec ? `<button class="icon-btn" data-edit="${r.rec.id}" title="${t('edit')}">✎</button>
+          <button class="icon-btn danger" data-del="${r.rec.id}" title="${t('del')}">🗑</button>` : '<span class="muted small">—</span>'}
+        </td></tr>`).join('') : `<tr><td colspan="5" class="empty">${ar2() ? 'لا يوجد عملاء' : 'no customers'}</td></tr>`;
+      host.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => editCustomer(Number(b.dataset.edit))));
+      host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+        const rec = (await global.DB.getAll('customers')).find((c) => c.id === Number(b.dataset.del));
+        if (!rec) return;
+        const used = rows.some((r) => r.name === rec.name && r.permits > 0);
+        if (used) { toast(ar2() ? 'لا يمكن حذف عميل له حركات صرف محفوظة' : 'customer has movements', 'err'); return; }
+        const ok = await confirmDialog({ title: ar2() ? 'حذف عميل' : 'Delete customer', message: `حذف "${rec.name}"؟`, danger: true });
+        if (!ok) return;
+        await global.DB.del('customers', rec.id);
+        toast(ar2() ? 'تم الحذف' : 'deleted', 'ok');
+        load();
+      }));
+    }
+    function editCustomer(id) {
+      const isNew = !id;
+      const rec = isNew ? null : null; /* loaded async below */
+      global.DB.getAll('customers').then((saved) => {
+        const cur = isNew ? null : saved.find((c) => c.id === id);
+        const node = el(`<div>
+          <label class="field"><span>${ar2() ? 'اسم العميل' : 'Name'} *</span>
+            <input id="c-name" type="text" value="${esc(cur ? cur.name : '')}" placeholder="${ar2() ? 'مثال: دهب للكرتون' : ''}"></label>
+          <label class="field"><span>${t('notes')}</span>
+            <input id="c-notes" type="text" value="${esc(cur ? (cur.notes || '') : '')}"></label>
+          <div class="form-error" id="c-err"></div>
+          <div class="confirm-actions">
+            <button class="btn btn-primary" id="c-save">${t('save')}</button>
+            <button class="btn btn-ghost" id="c-cancel">${t('cancel')}</button>
+          </div></div>`);
+        openModal(node, { title: isNew ? (ar2() ? 'عميل جديد' : 'New customer') : (ar2() ? 'تعديل عميل' : 'Edit customer') });
+        node.querySelector('#c-cancel').addEventListener('click', closeModal);
+        node.querySelector('#c-save').addEventListener('click', async () => {
+          const name = node.querySelector('#c-name').value.trim();
+          if (!name) { node.querySelector('#c-err').textContent = ar2() ? 'الاسم مطلوب' : 'name required'; return; }
+          const dup = saved.find((c) => c.name === name && (!cur || c.id !== cur.id));
+          if (dup) { node.querySelector('#c-err').textContent = ar2() ? 'العميل موجود بالفعل' : 'duplicate customer'; return; }
+          if (cur) await global.DB.put('customers', Object.assign({}, cur, { name, notes: node.querySelector('#c-notes').value.trim(), updatedAt: new Date().toISOString() }));
+          else await global.DB.add('customers', { name, notes: node.querySelector('#c-notes').value.trim(), source: 'manual', createdAt: new Date().toISOString() });
+          closeModal();
+          toast(ar2() ? 'تم الحفظ' : 'saved', 'ok');
+          load();
+        });
+      });
+    }
+    host.querySelector('#cu-add').addEventListener('click', () => editCustomer(null));
+    host.querySelector('#cu-search').addEventListener('input', draw);
+    load();
+  }
+  App.registerView('customers', renderCustomers);
+
+  /* ---------------- مهاجرات آمنة (تعمل مرة واحدة، لا تمس شيئًا إلا بمراجعة) ---------------- */
+  async function runSafeMigrations() {
+    /* 1) تصحيح وحدة الوزن: عمود «الوزن» في انتاج و مبيعات بالأطنان (تم
+       التحقق مقابل ملف التفاصيل: إنتاج 2025-01-01 = 51.5 طن = 51,500 كجم).
+       السجلات القديمة المستوردة كانت تُخزن كما هي — تحول ×1000 إلى كجم
+       مرة واحدة مع تسجيل العملية في سجل التدقيق. القيم الكبيرة (≥100)
+       تُترك كما هي احتياطًا لأنها قد تكون كجم بالفعل. لا يمس الرصيد:
+       الحساب يعتمد الكميات فقط. */
+    const migrated = await global.DB.getSetting('weightUnitMigrated', false);
+    if (!migrated) {
+      const all = await global.DB.getAll('transactions');
+      const targets = all.filter((r) => r.source === 'excel' && r.weight != null
+        && Number(r.weight) > 0 && Number(r.weight) < 100 && r.weightUnit !== 'kg');
+      if (targets.length) {
+        await global.DB.atomic(['transactions', 'audit'], (t) => {
+          const st = t.objectStore('transactions');
+          targets.forEach((r) => {
+            const after = Object.assign({}, r, {
+              weight: Math.round(Number(r.weight) * 1000 * 1000) / 1000,
+              weightUnit: 'kg',
+              weightWasTons: Number(r.weight),
+              updatedAt: new Date().toISOString(),
+            });
+            st.put(after);
+          });
+          t.objectStore('audit').add({
+            entity: 'database', action: 'migrate-weights', entityId: null,
+            before: null, after: { converted: targets.length },
+            at: new Date().toISOString(),
+            details: `تصحيح وحدة الوزن للأطنان → كجم (${targets.length} سطر مستورد) — لا أثر على أرصدة الكميات`,
+          });
+        });
+      }
+      await global.DB.setSetting('weightUnitMigrated', true);
+    }
+    /* 2) تعبئة العملاء من تاريخ الصرف (مرة واحدة، بدون تكرار) */
+    const seeded = await global.DB.getSetting('customersSeeded', false);
+    if (!seeded) {
+      const existing = await global.DB.getAll('customers');
+      const have = new Set(existing.map((c) => c.name));
+      const names = new Set();
+      for (const r of App.state.transactions) {
+        if ((Number(r.outQty) || 0) <= 0) continue;
+        const name = App.canonicalCustomer(r.customer) || '';
+        if (!name || name === 'الإنتاج' || name === 'رصيد اول المدة') continue;
+        names.add(name);
+      }
+      const addList = [...names].filter((n) => !have.has(n)).slice(0, 2000).map((name) => ({
+        name, notes: '', source: 'history', createdAt: new Date().toISOString(),
+      }));
+      if (addList.length) await global.DB.bulkPut('customers', addList);
+      await global.DB.setSetting('customersSeeded', true);
+    }
+  }
 
   /* ---------------- boot ---------------- */
   function setLoadingStatus(msg) {
@@ -1472,6 +1473,8 @@
     await loadAll();
     document.body.classList.add('loaded');
     navigate((location.hash || '#dashboard').replace('#', ''));
+    /* مهاجرات آمنة بعد أول عرض ناجح — لا تحجب التشغيل أبدًا */
+    runSafeMigrations().catch((e) => console.warn('[migrations]', e));
 
     window.addEventListener('hashchange', () => {
       const r = location.hash.replace('#', '');

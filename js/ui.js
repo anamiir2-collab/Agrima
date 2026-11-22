@@ -7,12 +7,14 @@
   /* ---------------- i18n ---------------- */
   const I18N = {
     ar: {
-      appName: 'نظام إدارة رصيد المخزن',
-      dashboard: 'الرئيسية', inventory: 'رصيد المخزن', addtx: 'تعديل حركة',
-      baker: 'حركة متابعة البكر', bakerAdd: 'إضافة إنتاج', bakerIssue: 'صرف للعملاء',
+      appName: 'Agrima — إدارة المخزون والبكر',
+      dashboard: 'لوحة التحكم', inventory: 'الرصيد الحالي', addtx: 'تعديل حركة',
+      baker: 'إدارة الرولات والبكر', bakerAdd: 'تسجيل البكر', bakerIssue: 'إذن صرف جديد',
+      reelsAdd: 'تسجيل البكر', rolls: 'إدارة الرولات والبكر', production: 'سجل الإنتاج',
+      outlog: 'سجل حركات الصرف', customers: 'العملاء', importExport: 'الاستيراد والتصدير',
       issuedocs: 'أذون الصرف', issuedoc: 'عرض إذن صرف',
       additions: 'إنتاج وإضافات', withdrawals: 'الصرف والمبيعات', history: 'سجل الحركات',
-      reports: 'التقارير والطباعة', products: 'إدارة الأصناف', backup: 'النسخ الاحتياطي',
+      reports: 'التقارير', products: 'إدارة الأصناف', backup: 'النسخ الاحتياطي',
       settings: 'الإعدادات',
       // issue documents
       rollWeight: 'وزن البكرة (كجم)', classification: 'التصنيف',
@@ -48,12 +50,14 @@
       importExcel: 'استيراد ملف الإكسل',
     },
     en: {
-      appName: 'Inventory Balance System',
-      dashboard: 'Dashboard', inventory: 'Inventory', addtx: 'Edit movement',
-      baker: 'Bale movements', bakerAdd: 'Production entry', bakerIssue: 'Customer issue',
-      issuedocs: 'Issue documents', issuedoc: 'Issue document view',
+      appName: 'Agrima — Inventory & Rolls Management',
+      dashboard: 'Dashboard', inventory: 'Current balance', addtx: 'Edit movement',
+      baker: 'Rolls & reels', bakerAdd: 'Register reels', bakerIssue: 'New issue permit',
+      reelsAdd: 'Register reels', rolls: 'Rolls & reels', production: 'Production log',
+      outlog: 'Withdrawal log', customers: 'Customers', importExport: 'Import & Export',
+      issuedocs: 'Issue permits', issuedoc: 'Issue document view',
       additions: 'Additions', withdrawals: 'Withdrawals', history: 'History',
-      reports: 'Reports & Printing', products: 'Products', backup: 'Backup & Restore',
+      reports: 'Reports', products: 'Products', backup: 'Backup & Restore',
       settings: 'Settings',
       rollWeight: 'Bale weight (kg)', classification: 'Classification',
       tax: 'Tax', nontax: 'Non-tax', docNo: 'Voucher No.',

@@ -19,9 +19,10 @@
   const REPORTS = [
     { id: 'warehouse', icon: '📦', name: 'التقرير', en: 'Warehouse report' },
     { id: 'balance', icon: '📊', name: 'تقرير الرصيد الحالي', en: 'Current balance report' },
+    { id: 'rolls', icon: '🔄', name: 'تقرير الرولات والبكر', en: 'Rolls & reels report' },
     { id: 'additions', icon: '➕', name: 'تقرير حركة الإضافات', en: 'Additions report' },
     { id: 'withdrawals', icon: '➖', name: 'تقرير حركة الصرف', en: 'Withdrawals report' },
-    { id: 'issuedocs', icon: '🧾', name: 'تقرير أذون الصرف', en: 'Issue vouchers report' },
+    { id: 'issuedocs', icon: '🧾', name: 'تقرير أذون الصرف', en: 'Issue permits report' },
     { id: 'product', icon: '📋', name: 'تقرير حركة صنف معين', en: 'Product movement report' },
     { id: 'customer', icon: '👤', name: 'تقرير حركة عميل معين', en: 'Customer movement report' },
     { id: 'period', icon: '🗓', name: 'تقرير حركة المخزن خلال فترة محددة', en: 'Period movement report' },
@@ -46,6 +47,12 @@
 
     let current = 'warehouse';
     let lastModel = null; // { headers, rows, totals, title, subtitle, openingClosing, summary, cards }
+    /* بيانات الرولات والبكر للتقرير المخصص — تُحمّل مسبقًا */
+    let rollsData = [], reelsData = [];
+    Promise.all([global.DB.getAll('rolls'), global.DB.getAll('reels')]).then(([rr, ee]) => {
+      rollsData = rr; reelsData = ee;
+      if (current === 'rolls') build();
+    }).catch(() => {});
 
     host.querySelectorAll('.report-card').forEach((b) => b.addEventListener('click', () => {
       current = b.dataset.report;
@@ -68,6 +75,7 @@
       const needs = {
         warehouse: ['product', 'gsm', 'size', 'asof'],
         balance: ['product', 'gsm', 'size'],
+        rolls: ['product', 'gsm', 'rollstatus'],
         additions: ['from', 'to', 'product', 'gsm', 'size', 'customer'],
         withdrawals: ['from', 'to', 'product', 'gsm', 'size', 'customer'],
         issuedocs: ['from', 'to', 'cls'],
@@ -112,6 +120,8 @@
         add(`<label class="fl"><span>${t('customer')}</span><select id="rf-customer"><option value="">${lang() ? '— اختر العميل —' : '— select —'}</option>${customers.map((c) => `<option>${esc(c)}</option>`).join('')}</select></label>`);
       if (needs.includes('type'))
         add(`<label class="fl"><span>${t('type')}</span><select id="rf-type"><option value="">${t('all')}</option><option value="add">${t('add')}</option><option value="out">${t('out')}</option></select></label>`);
+      if (needs.includes('rollstatus'))
+        add(`<label class="fl"><span>${lang() ? 'حالة البكرة' : 'Reel status'}</span><select id="rf-rollst"><option value="">${t('all')}</option><option value="available">متاحة</option><option value="dispatched">مصروفة</option><option value="undefined">غير محددة (مستوردة)</option></select></label>`);
       if (needs.includes('cls'))
         add(`<label class="fl"><span>${t('classification')}</span><select id="rf-cls"><option value="">${t('all')}</option><option value="ض">${t('tax')}</option><option value="غ">${t('nontax')}</option></select></label>`);
       const btnWrap = el(`<div class="fl fl-btn"><button class="btn btn-primary" id="rf-run">${lang() ? 'عرض التقرير' : 'Generate'}</button></div>`);
@@ -226,36 +236,103 @@
             `${lang() ? 'أصناف برصيد سالب' : 'Negative-balance items'}: ${fmtNum(rows.filter((r) => r.net < 0).length)}`,
           ],
         };
+      } else if (current === 'rolls') {
+        /* تقرير الرولات والبكر: كل رول مع بكره وحالاتها — بحث وتصفية وطباعة وتصدير */
+        const fam = product, gsmF = gsm, stF = val('rf-rollst');
+        const reelsByRoll = new Map();
+        for (const r of reelsData) {
+          if (!reelsByRoll.has(r.rollNo)) reelsByRoll.set(r.rollNo, []);
+          reelsByRoll.get(r.rollNo).push(r);
+        }
+        let rollList = rollsData.slice().sort((a, b) => b.rollNo - a.rollNo);
+        if (fam) {
+          rollList = rollList.filter((r) => {
+            const rs = reelsByRoll.get(r.rollNo) || [];
+            return rs.some((x) => familyOf(x.quality) === fam);
+          });
+        }
+        if (gsmF) {
+          rollList = rollList.filter((r) => String(r.gram) === gsmF
+            || (reelsByRoll.get(r.rollNo) || []).some((x) => String(x.gram) === gsmF));
+        }
+        const rows = [];
+        let totReels = 0, totWeight = 0;
+        const MAX_PRINT_ROWS = 800; /* الطباعة تعرض أول 800 بكرة — الكل في الإجماليات والتصدير */
+        for (const roll of rollList) {
+          const rs = (reelsByRoll.get(roll.rollNo) || []).slice().sort((a, b) => a.reelNo - b.reelNo);
+          const filtered = stF ? rs.filter((x) => x.status === stF) : rs;
+          if (stF && !filtered.length) continue;
+          totReels += filtered.length;
+          totWeight += filtered.reduce((s, x) => s + (Number(x.weight) || 0), 0);
+          if (rows.length >= MAX_PRINT_ROWS) continue;
+          filtered.forEach((x, i) => {
+            if (rows.length >= MAX_PRINT_ROWS) return;
+            rows.push([
+              i === 0 ? fmtNum(roll.rollNo) : '',
+              i === 0 ? fmtDate(roll.date) : '',
+              i === 0 ? (roll.gram == null ? '—' : fmtNum(roll.gram)) : '',
+              fmtNum(x.reelNo), fmtNum(x.size == null ? '—' : x.size),
+              x.weight == null ? '—' : fmtNum(x.weight, 3),
+              x.gram == null ? '—' : fmtNum(x.gram),
+              x.quality || '—',
+              global.TX.REEL_STATUS[x.status] || x.status,
+            ]);
+          });
+        }
+        model = {
+          title,
+          subtitle: [fmtSubtitle()],
+          summary: [
+            `${lang() ? 'عدد الرولات' : 'Rolls'}: ${fmtNum(rollList.length)}`,
+            `${lang() ? 'عدد البكر' : 'Reels'}: ${fmtNum(totReels)}`,
+            `${lang() ? 'إجمالي الوزن (كجم)' : 'Total weight (kg)'}: ${fmtNum(global.CALC.round6(totWeight), 3)}`,
+            ...(rows.length >= MAX_PRINT_ROWS ? [`${lang() ? 'يُعرض أول' : 'showing first'} ${fmtNum(MAX_PRINT_ROWS)} ${lang() ? 'بكرة من الإجمالي — استخدم الفلاتر للتنقيح والتصدير للقائمة الكاملة' : 'reels — use filters and Excel export for the full list'}`] : []),
+          ],
+          headers: [lang() ? 'رقم الرول' : 'Roll', t('date'), t('gsm'),
+            lang() ? 'رقم البكرة' : 'Reel', t('size'), lang() ? 'الوزن (كجم)' : 'Weight (kg)',
+            t('gsm'), t('quality'), lang() ? 'الحالة' : 'Status'],
+          rows,
+          totalsRow: [lang() ? 'الإجمالي' : 'Total', `${fmtNum(rollList.length)} ${lang() ? 'رول' : 'rolls'}`, '',
+            `${fmtNum(totReels)} ${lang() ? 'بكرة' : 'reels'}`, '', '', '', '', fmtNum(global.CALC.round6(totWeight), 3)],
+        };
       } else if (current === 'issuedocs') {
+        /* تقرير الأذون من المصدر الموحد: أذون التطبيق (معتمدة + مسودات) + المستوردة */
         const cls = val('rf-cls');
-        let docs = App.collectIssueDocs(App.state.transactions).filter((d) =>
-          (!from || d.date >= from) && (!to || d.date <= to) && (!cls || d.classification === cls));
-        docs.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.rows[0].id || 0) - (a.rows[0].id || 0)));
+        const statusF = '';
+        let docs = App.collectVouchers(App.state.transactions, App.state.permits).filter((d) =>
+          (!from || d.date >= from) && (!to || d.date <= to) && (!cls || d.cls === cls));
+        docs.sort((a, b) => {
+          const ta = `${a.date}|${a.minId || 0}`, tb = `${b.date}|${b.minId || 0}`;
+          return ta < tb ? 1 : ta > tb ? -1 : 0;
+        });
         const rows = [];
         for (const d of docs) {
-          for (const sg of d.docGroups) {
-            for (const s of sg.sizes) {
-              rows.push([d.permitNo || '—', fmtDate(d.date), d.customer || '',
-                d.classification ? global.TX.CLS_LABEL[d.classification] : '—',
-                sg.family, fmtNum(sg.gsm), sg.weight == null ? '—' : fmtNum(sg.weight),
-                fmtNum(s.size), fmtNum(s.qty)]);
-            }
+          const st = d.kind === 'permit' ? (d.status === 'draft' ? (lang() ? 'مسودة' : 'draft') : (lang() ? 'معتمد' : 'approved')) : (lang() ? 'مستورد' : 'imported');
+          for (const l of d.lines) {
+            rows.push([d.permitNo || '—', fmtDate(d.date), d.customer || '',
+              d.cls ? global.TX.CLS_LABEL[d.cls] : '—',
+              st,
+              l.family, fmtNum(l.gsm), fmtNum(l.size), fmtNum(l.qty),
+              l.weightKg != null ? fmtNum(l.weightKg, 3) : (lang() ? 'تقديري' : 'est.')]);
           }
         }
         const totalRolls = docs.reduce((s, d) => s + d.totalRolls, 0);
-        const nTax = docs.filter((d) => d.classification === 'ض').length;
-        const nNon = docs.filter((d) => d.classification === 'غ').length;
+        const totalW = docs.reduce((s, d) => s + (d.totalWeightKg || 0), 0);
+        const nTax = docs.filter((d) => d.cls === 'ض').length;
+        const nNon = docs.filter((d) => d.cls === 'غ').length;
         model = {
           title,
           subtitle: [fmtSubtitle(), `${t('from')}: ${from ? fmtDate(from) : '—'}   ${t('to')}: ${to ? fmtDate(to) : '—'}`],
           summary: [
-            `${lang() ? 'عدد الأذون' : 'Documents'}: ${fmtNum(docs.length)} (${lang() ? 'ضريبي' : 'tax'}: ${fmtNum(nTax)} — ${lang() ? 'غير ضريبي' : 'non-tax'}: ${fmtNum(nNon)})`,
+            `${lang() ? 'عدد الأذون' : 'Permits'}: ${fmtNum(docs.length)} (${lang() ? 'ضريبي' : 'tax'}: ${fmtNum(nTax)} — ${lang() ? 'غير ضريبي' : 'non-tax'}: ${fmtNum(nNon)})`,
             `${t('totalRolls')}: ${fmtNum(totalRolls)}`,
+            `${t('voucherWeight')} (${t('kg')}): ${fmtNum(global.CALC.round6(totalW), 3)}`,
           ],
-          headers: [t('docNo'), t('date'), t('customer'), t('classification'), t('quality'),
-            t('gsm'), t('rollWeight'), t('size'), t('outQty')],
+          headers: [t('docNo'), t('date'), t('customer'), t('classification'),
+            lang() ? 'الحالة' : 'Status', t('quality'), t('gsm'), t('size'), t('outQty'),
+            `${t('voucherWeight')} (${t('kg')})`],
           rows,
-          totalsRow: [lang() ? 'الإجمالي' : 'Total', `${fmtNum(docs.length)} ${lang() ? 'إذن' : 'docs'}`, '', '', '', '', '', '', fmtNum(totalRolls)],
+          totalsRow: [lang() ? 'الإجمالي' : 'Total', `${fmtNum(docs.length)} ${lang() ? 'إذن' : 'permits'}`, '', '', '', '', '', '', fmtNum(totalRolls), fmtNum(global.CALC.round6(totalW), 3)],
         };
       } else if (current === 'additions' || current === 'withdrawals') {
         const isAdd = current === 'additions';

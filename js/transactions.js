@@ -611,10 +611,887 @@
     });
   }
 
+  /* =======================================================================
+     ROLLS & REELS (الرولات والبكر) — تسجيل البكر هو مصدر الإنتاج الجديد
+     =======================================================================
+     A roll (رول رئيسي) carries a generated immutable number and N reels
+     (بكر). Saving a roll is ONE atomic transaction that inserts the roll,
+     every reel (status «متاحة») and one production movement row per reel
+     (addQty=1 with the reel's ACTUAL weight in kg) — so the balance, the
+     production log and the reports update instantly and can never be
+     half-applied. Re-importing / double-submitting cannot duplicate
+     anything: the roll number is assigned inside the transaction as
+     max(used)+1 and the unique rollNo/rollReel indexes abort any clash. */
+
+  function uuid() {
+    try { return crypto.randomUUID(); } catch (e) {
+      return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    }
+  }
+
+  const REEL_STATUS = { available: 'متاحة', dispatched: 'مصروفة', undefined: 'غير محددة' };
+
+  function validateReelInput(r) {
+    const errors = [];
+    const no = parseInt(String(r.reelNo), 10);
+    if (!Number.isFinite(no) || no < 1) errors.push(`رقم البكرة غير صحيح: "${r.reelNo}"`);
+    const size = Number(r.size);
+    if (!Number.isFinite(size) || size <= 0) errors.push(`بكرة ${r.reelNo}: المقاس مطلوب وأكبر من صفر`);
+    const w = Number(r.weight);
+    if (!Number.isFinite(w) || w <= 0) errors.push(`بكرة ${r.reelNo}: الوزن مطلوب وأكبر من صفر`);
+    const g = Number(r.gram);
+    if (!Number.isFinite(g) || g <= 0) errors.push(`بكرة ${r.reelNo}: الجرام مطلوب وأكبر من صفر`);
+    if (!cleanStr(r.quality)) errors.push(`بكرة ${r.reelNo}: الصنف مطلوب`);
+    return errors;
+  }
+
+  /* Largest roll number already used (rolls store = imported details + new
+     registrations). Persisted floor in settings 'rollSeq' keeps numbers
+     growing even if rolls are deleted — deleted numbers are never reused. */
+  function maxRollNoInTx(rollStore, onDone) {
+    const idx = rollStore.index('rollNo');
+    const req = idx.openCursor(null, 'prev');
+    req.onsuccess = () => {
+      const cur = req.result;
+      onDone(cur ? Number(cur.key) : 0);
+    };
+    req.onerror = () => onDone(0);
+  }
+
+  async function nextRollNo() {
+    const db = await global.DB.open();
+    const max = await new Promise((resolve) => {
+      const t = db.transaction('rolls', 'readonly');
+      maxRollNoInTx(t.objectStore('rolls'), resolve);
+    });
+    const seq = Number(await global.DB.getSetting('rollSeq', 0)) || 0;
+    return Math.max(max + 1, seq || 1);
+  }
+
+  /* movement row for one reel (production source = تسجيل البكر) */
+  function reelProductionRow(reel, roll, groupId) {
+    return {
+      date: roll.date,
+      quality: cleanStr(reel.quality),
+      gsm: toNumberOrRaw(reel.gram),
+      size: toNumberOrRaw(reel.size),
+      customer: 'الإنتاج',
+      permitNo: '',
+      addQty: 1,
+      outQty: 0,
+      weight: Number(reel.weight) || null,
+      settlement: '',
+      notes: `رول ${roll.rollNo} — بكرة ${reel.reelNo}`,
+      groupId,
+      rollNo: roll.rollNo,
+      reelId: reel.id,
+      source: 'reels',
+      fingerprint: ['reel', roll.rollNo, reel.reelNo, reel.id].join('||'),
+      createdAt: new Date().toISOString(),
+      updatedAt: null,
+    };
+  }
+
+  /**
+   * Save a roll + its reels + automatic production movements (one tx).
+   * @param {{date, gram, notes, reels: Array}} payload
+   * @returns {{rollNo, reels: n, movements: n}}
+   */
+  function saveRollWithReels(payload) {
+    const errors = [];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanStr(payload.date))) errors.push('تاريخ الرول مطلوب بصيغة صحيحة');
+    if (!payload.reels || !payload.reels.length) errors.push('أضف بكرة واحدة على الأقل قبل الحفظ');
+    const seen = new Set();
+    for (const r of payload.reels || []) {
+      errors.push(...validateReelInput(r));
+      const k = String(r.reelNo);
+      if (seen.has(k)) errors.push(`رقم البكرة ${r.reelNo} مكرر داخل الرول`);
+      seen.add(k);
+    }
+    if (errors.length) return Promise.reject({ type: 'validation', errors });
+
+    /* -- DB.atomic's workFn is synchronous: the max-rollNo cursor and the
+       settings read are consumed via nested onsuccess handlers so every
+       next request is queued from inside the previous handler (the
+       IndexedDB transaction can never auto-commit mid-flight). -- */
+    return global.DB.atomic(['rolls', 'reels', 'transactions', 'products', 'audit', 'settings'], (t) => {
+      const rollStore = t.objectStore('rolls');
+      const reelStore = t.objectStore('reels');
+      const txStore = t.objectStore('transactions');
+      const prodStore = t.objectStore('products');
+      const settingsStore = t.objectStore('settings');
+      let assignedNo = null;
+      const fail = (msgs) => { saveRollWithReels._fail = msgs; try { t.abort(); } catch (e2) { /* noop */ } };
+
+      /* 1) next number = max(used)+1 inside this transaction (concurrency-safe) */
+      const idx = rollStore.index('rollNo');
+      const cur = idx.openCursor(null, 'prev');
+      cur.onsuccess = () => {
+        const maxNo = cur.result ? Number(cur.result.key) : 0;
+        const seqGet = settingsStore.get('rollSeq');
+        seqGet.onsuccess = () => {
+          const seqFloor = Number(seqGet.result ? seqGet.result.value : 0) || 0;
+          assignedNo = Math.max(maxNo + 1, seqFloor || 1);
+
+          /* 2) roll record */
+          const grams = [...new Set(payload.reels.map((r) => Number(r.gram)).filter((g) => Number.isFinite(g) && g > 0))];
+          const roll = {
+            rollNo: assignedNo,
+            gram: Number(payload.gram) > 0 ? Number(payload.gram) : (grams.length === 1 ? grams[0] : null),
+            date: cleanStr(payload.date),
+            notes: cleanStr(payload.notes || ''),
+            source: 'reels',
+            createdAt: new Date().toISOString(),
+            updatedAt: null,
+          };
+          const addReq = rollStore.add(roll); /* unique rollNo index guards duplicates */
+          addReq.onsuccess = () => { roll.id = addReq.result; };
+
+          /* 3) reels (status متاحة) + 4) one production movement per reel */
+          const groupId = 'R:roll-' + assignedNo;
+          const movRows = [];
+          payload.reels.forEach((r, i) => {
+            const reel = {
+              id: uuid(),
+              rollNo: assignedNo,
+              reelNo: parseInt(String(r.reelNo), 10),
+              size: Number(r.size),
+              weight: Number(r.weight),
+              gram: Number(r.gram),
+              quality: cleanStr(r.quality),
+              status: 'available',
+              permitRef: null,
+              rollReel: assignedNo + '|' + parseInt(String(r.reelNo), 10),
+              source: 'reels',
+              createdAt: new Date().toISOString(),
+              updatedAt: null,
+            };
+            reelStore.add(reel);
+            const row = reelProductionRow(reel, roll, groupId);
+            movRows.push(row);
+            txStore.add(row);
+            /* product-master top-up */
+            const combo = comboKey(reel.quality, reel.gram, reel.size);
+            const g = prodStore.index('combo').get(combo);
+            g.onsuccess = () => {
+              if (!g.result) {
+                prodStore.add({ quality: cleanStr(reel.quality), gsm: toNumberOrRaw(reel.gram),
+                  size: toNumberOrRaw(reel.size), combo, source: 'reels',
+                  createdAt: new Date().toISOString() });
+              }
+            };
+          });
+
+          /* 5) sequence floor + audit */
+          settingsStore.put({ key: 'rollSeq', value: assignedNo + 1 });
+          t.objectStore('audit').add({
+            entity: 'roll', action: 'add', entityId: assignedNo, before: null,
+            after: { roll, reels: payload.reels.length, movements: movRows.length },
+            at: new Date().toISOString(),
+            details: `تسجيل رول ${assignedNo} — ${payload.reels.length} بكرة — إنتاج تلقائي ${movRows.length} حركة`,
+          });
+        };
+      };
+      return { getRollNo: () => assignedNo };
+    }).then((res) => ({ rollNo: res.getRollNo(), reels: payload.reels.length }));
+  }
+
+  /* ---------- reel edit / delete ---------- */
+  function updateReel(reelId, changes) {
+    return global.DB.atomic(['reels', 'transactions', 'rolls', 'audit'], (t, setFail) => {
+      const reelStore = t.objectStore('reels');
+      const g = reelStore.get(reelId);
+      g.onsuccess = () => {
+        const before = g.result;
+        if (!before) { setFail({ type: 'validation', errors: ['البكرة غير موجودة'] }); t.abort(); return; }
+        if (before.status === 'dispatched') {
+          setFail({ type: 'validation', errors: ['لا يمكن تعديل بكرة مصروفة — تعديلها يفسد بيانات الصرف. احذف أو عدّل إذن الصرف أولًا.'] });
+          t.abort(); return;
+        }
+        const merged = Object.assign({}, before, {
+          reelNo: changes.reelNo !== undefined ? parseInt(String(changes.reelNo), 10) : before.reelNo,
+          size: changes.size !== undefined ? Number(changes.size) : before.size,
+          weight: changes.weight !== undefined ? Number(changes.weight) : before.weight,
+          gram: changes.gram !== undefined ? Number(changes.gram) : before.gram,
+          quality: changes.quality !== undefined ? cleanStr(changes.quality) : before.quality,
+          updatedAt: new Date().toISOString(),
+        });
+        const errs = validateReelInput(merged);
+        if (errs.length) { setFail({ type: 'validation', errors: errs }); t.abort(); return; }
+        merged.rollReel = merged.rollNo + '|' + merged.reelNo;
+        /* uniqueness of (rollNo,reelNo) excluding self */
+        const dup = reelStore.index('rollReel').get(merged.rollReel);
+        dup.onsuccess = () => {
+          if (dup.result && dup.result.id !== reelId) {
+            setFail({ type: 'validation', errors: [`رقم البكرة ${merged.reelNo} موجود مسبقًا في الرول ${merged.rollNo}`] });
+            t.abort(); return;
+          }
+          reelStore.put(merged);
+          /* keep the linked production movement in sync (available reels only)
+             — balance recalculates automatically from the movement rows */
+          if (before.source === 'reels') {
+            const txStore = t.objectStore('transactions');
+            const byReel = txStore.index('reelId').get(reelId);
+            byReel.onsuccess = () => {
+              const row = byReel.result;
+              if (row) {
+                const after = Object.assign({}, row, {
+                  quality: merged.quality, gsm: toNumberOrRaw(merged.gram),
+                  size: toNumberOrRaw(merged.size), weight: Number(merged.weight) || null,
+                  notes: `رول ${merged.rollNo} — بكرة ${merged.reelNo}`,
+                  fingerprint: ['reel', merged.rollNo, merged.reelNo, reelId].join('||'),
+                  updatedAt: new Date().toISOString(),
+                });
+                txStore.put(after);
+                /* product master top-up for the new combo */
+                const prodStore = t.objectStore('products');
+                const combo = comboKey(merged.quality, merged.gram, merged.size);
+                const pg = prodStore.index('combo').get(combo);
+                pg.onsuccess = () => {
+                  if (!pg.result) prodStore.add({ quality: merged.quality, gsm: toNumberOrRaw(merged.gram),
+                    size: toNumberOrRaw(merged.size), combo, source: 'reels', createdAt: new Date().toISOString() });
+                };
+              }
+            };
+          }
+          t.objectStore('audit').add({
+            entity: 'reel', action: 'edit', entityId: reelId, before, after: merged,
+            at: new Date().toISOString(),
+            details: `تعديل بكرة ${before.rollNo}/${before.reelNo}`,
+          });
+        };
+      };
+      return { ok: true };
+    });
+  }
+
+  function deleteReel(reelId) {
+    return global.DB.atomic(['reels', 'transactions', 'audit'], (t, setFail) => {
+      const reelStore = t.objectStore('reels');
+      const g = reelStore.get(reelId);
+      g.onsuccess = () => {
+        const reel = g.result;
+        if (!reel) { setFail({ type: 'validation', errors: ['البكرة غير موجودة'] }); t.abort(); return; }
+        if (reel.status === 'dispatched') {
+          setFail({ type: 'validation', errors: ['لا يمكن حذف بكرة مصروفة — احذف أو عدّل إذن الصرف أولًا.'] });
+          t.abort(); return;
+        }
+        reelStore.delete(reelId);
+        if (reel.source === 'reels') {
+          const txStore = t.objectStore('transactions');
+          const byReel = txStore.index('reelId').get(reelId);
+          byReel.onsuccess = () => { if (byReel.result) txStore.delete(byReel.result.id); };
+        }
+        t.objectStore('audit').add({
+          entity: 'reel', action: 'delete', entityId: reelId, before: reel, after: null,
+          at: new Date().toISOString(),
+          details: `حذف بكرة ${reel.rollNo}/${reel.reelNo}`,
+        });
+      };
+      return { ok: true };
+    });
+  }
+
+  function deleteRoll(rollNo) {
+    return global.DB.atomic(['rolls', 'reels', 'transactions', 'audit'], (t, setFail) => {
+      const reelStore = t.objectStore('reels');
+      const rollStore = t.objectStore('rolls');
+      const byRoll = reelStore.index('rollNo').getAll(rollNo);
+      byRoll.onsuccess = () => {
+        const reels = byRoll.result || [];
+        const dispatched = reels.filter((r) => r.status === 'dispatched');
+        if (dispatched.length) {
+          setFail({ type: 'validation', errors: [`لا يمكن حذف الرول ${rollNo}: ${dispatched.length} بكرة مصروفة مرتبطة بأذون صرف.`] });
+          t.abort(); return;
+        }
+        const rollGet = rollStore.index('rollNo').get(rollNo);
+        rollGet.onsuccess = () => {
+          if (rollGet.result) rollStore.delete(rollGet.result.id);
+          const txStore = t.objectStore('transactions');
+          reels.forEach((r) => {
+            reelStore.delete(r.id);
+            if (r.source === 'reels') {
+              const byReel = txStore.index('reelId').get(r.id);
+              byReel.onsuccess = () => { if (byReel.result) txStore.delete(byReel.result.id); };
+            }
+          });
+          t.objectStore('audit').add({
+            entity: 'roll', action: 'delete', entityId: rollNo,
+            before: { rollNo, reels: reels.length }, after: null,
+            at: new Date().toISOString(),
+            details: `حذف رول ${rollNo} بـ ${reels.length} بكرة`,
+          });
+        };
+      };
+      return { ok: true };
+    });
+  }
+
+  /* bulk import of historical rolls/reels (details only — no movements) */
+  function importRolls(rolls, meta) {
+    const errors = [];
+    const seenRoll = new Set(), seenReel = new Set();
+    for (const roll of rolls) {
+      if (!Number.isFinite(Number(roll.rollNo))) errors.push('رقم رول غير صحيح في البيانات المستوردة');
+      if (seenRoll.has(roll.rollNo)) errors.push(`رول مكرر داخل الملف: ${roll.rollNo}`);
+      seenRoll.add(roll.rollNo);
+      for (const r of roll.reels || []) {
+        const k = roll.rollNo + '|' + r.reelNo;
+        if (seenReel.has(k)) errors.push(`بكرة مكررة داخل الملف: ${k}`);
+        seenReel.add(k);
+      }
+    }
+    if (errors.length) return Promise.reject({ type: 'validation', errors: errors.slice(0, 20) });
+    let maxNo = 0;
+    const rollRows = [], reelRows = [];
+    for (const roll of rolls) {
+      if (Number(roll.rollNo) > maxNo) maxNo = Number(roll.rollNo);
+      rollRows.push({
+        rollNo: Number(roll.rollNo),
+        gram: Number(roll.gram) > 0 ? Number(roll.gram) : null,
+        date: cleanStr(roll.date),
+        notes: '',
+        source: 'excel',
+        createdAt: new Date().toISOString(),
+        updatedAt: null,
+      });
+      for (const r of roll.reels || []) {
+        reelRows.push({
+          id: uuid(),
+          rollNo: Number(roll.rollNo),
+          reelNo: parseInt(String(r.reelNo), 10),
+          size: Number(r.size) > 0 ? Number(r.size) : null,
+          weight: Number(r.weight) > 0 ? Number(r.weight) : null,
+          gram: Number(r.gram) > 0 ? Number(r.gram) : null,
+          quality: cleanStr(r.quality),
+          status: 'undefined', /* تاريخية: لا تُحسب في الرصيد */
+          permitRef: null,
+          rollReel: Number(roll.rollNo) + '|' + parseInt(String(r.reelNo), 10),
+          source: 'excel',
+          createdAt: new Date().toISOString(),
+          updatedAt: null,
+        });
+      }
+    }
+    return global.DB.atomic(['rolls', 'reels', 'settings', 'audit'], (t, setFail) => {
+      const rollStore = t.objectStore('rolls');
+      const reelStore = t.objectStore('reels');
+      const settingsStore = t.objectStore('settings');
+      let skipped = 0;
+      rollRows.forEach((r) => {
+        const dup = rollStore.index('rollNo').get(r.rollNo);
+        dup.onsuccess = () => { if (dup.result) skipped++; else rollStore.add(r); };
+      });
+      reelRows.forEach((r) => {
+        const dup = reelStore.index('rollReel').get(r.rollReel);
+        dup.onsuccess = () => { if (!dup.result) reelStore.add(r); };
+      });
+      const seqGet = settingsStore.get('rollSeq');
+      seqGet.onsuccess = () => {
+        const cur = Number(seqGet.result ? seqGet.result.value : 0) || 0;
+        if (maxNo + 1 > cur) settingsStore.put({ key: 'rollSeq', value: maxNo + 1 });
+      };
+      t.objectStore('audit').add({
+        entity: 'roll', action: 'import', entityId: null,
+        before: null, after: { rolls: rollRows.length, reels: reelRows.length },
+        at: new Date().toISOString(),
+        details: `استيراد تفاصيل الرولات: ${rollRows.length} رول، ${reelRows.length} بكرة (غير محددة — لا تدخل الرصيد)${meta ? ' — ' + meta : ''}`,
+      });
+      return { rolls: rollRows.length, reels: reelRows.length, skipped };
+    });
+  }
+
+  /* =======================================================================
+     PERMITS (أذون الصرف) — draft → approved with reel-level tracking
+     =======================================================================
+     A permit is a first-class document (رقم، نوع ضريبي/غير ضريبي مستقل،
+     عميل، تاريخ، أسطر، ملاحظات، حالة). Saving a draft never touches stock;
+     APPROVING runs inside one atomic transaction: availability gate,
+     duplicate-number gate, per-reel availability (منع صرف بكرة مرتين),
+     movement rows with groupId 'P:<permitId>', reel status flip to
+     «مصروفة», sequence bump and audit — all or nothing. */
+
+  const PERMIT_GROUP_PREFIX = 'P:';
+
+  function permitLinesToRows(permit, reelWeightOf) {
+    const rows = [];
+    for (const line of permit.lines || []) {
+      let weight = null;
+      if (Array.isArray(line.reelIds) && line.reelIds.length) {
+        weight = line.reelIds.reduce((s, id) => s + (reelWeightOf(id) || 0), 0);
+        weight = global.CALC.round6(weight);
+      } else if (line.weight != null && Number(line.weight) > 0) {
+        weight = Number(line.weight);
+      }
+      rows.push({
+        date: cleanStr(permit.date),
+        quality: cleanStr(line.quality),
+        gsm: toNumberOrRaw(line.gsm),
+        size: toNumberOrRaw(line.size),
+        customer: cleanStr(permit.customer),
+        permitNo: cleanStr(permit.permitNo),
+        addQty: 0,
+        outQty: Number(line.qty) || 0,
+        weight,
+        settlement: permit.cls,
+        notes: cleanStr(permit.notes || ''),
+        groupId: PERMIT_GROUP_PREFIX + permit.id,
+        permitId: permit.id,
+        source: permit.source || 'permit',
+        fingerprint: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: null,
+      });
+    }
+    return rows;
+  }
+
+  function validatePermit(p) {
+    const errors = [];
+    if (!cleanStr(p.permitNo)) errors.push('رقم الإذن مطلوب');
+    if (['ض', 'غ'].indexOf(p.cls) < 0) errors.push('اختر نوع الإذن (ضريبي / غير ضريبي)');
+    if (!cleanStr(p.customer)) errors.push('اسم العميل مطلوب');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanStr(p.date))) errors.push('التاريخ مطلوب بصيغة صحيحة');
+    if (!p.lines || !p.lines.length) errors.push('أضف سطرًا واحدًا على الأقل لتفاصيل الصرف');
+    for (const l of p.lines || []) {
+      if (!cleanStr(l.quality)) errors.push('الصنف مطلوب في كل سطر');
+      if (!(Number(l.gsm) > 0)) errors.push(`الجرام مطلوب في سطر ${l.size || '—'}`);
+      if (!(Number(l.size) > 0)) errors.push('المقاس مطلوب في كل سطر');
+      if (!(Number(l.qty) > 0)) errors.push(`العدد يجب أن يكون أكبر من صفر في المقاس ${l.size || '—'}`);
+      if (Array.isArray(l.reelIds) && l.reelIds.length && l.reelIds.length !== Number(l.qty)) {
+        errors.push(`المقاس ${l.size}: العدد يجب أن يساوي عدد البكر المحددة (${l.reelIds.length})`);
+      }
+    }
+    return errors;
+  }
+
+  function permitKeyOf(p) {
+    return cleanStr(p.cls) + '|' + cleanStr(p.permitNo);
+  }
+
+  /* 3-dim availability gate (same engine as the balance report the user
+     sees — quantity per product/gsm/size). `excludeGroupId` removes the
+     permit's own old rows when re-approving an edit. */
+  function checkAvailability3D(allTx, pendingRows, excludeGroupId) {
+    const avail = new Map();
+    for (const r of allTx) {
+      if (excludeGroupId && r.groupId === excludeGroupId) continue;
+      const k = global.CALC.comboKeyOf(r);
+      avail.set(k, (avail.get(k) || 0) + (Number(r.addQty) || 0) - (Number(r.outQty) || 0));
+    }
+    const errors = [];
+    for (const row of pendingRows) {
+      const k = global.CALC.comboKeyOf(row);
+      const free = avail.get(k) || 0;
+      const need = Number(row.outQty) || 0;
+      if (need - free > 0) {
+        errors.push(`الرصيد لا يكفي: ${row.quality} / ${row.gsm} جرام / مقاس ${row.size} — المتاح ${free} والمطلوب ${need}`);
+      }
+    }
+    return errors;
+  }
+
+  /* numbers already approved at some point (persisted) — never reused
+     silently even after the voucher is deleted */
+  async function getUsedDocNos() {
+    const v = await global.DB.getSetting('usedDocNos', []);
+    return new Set(Array.isArray(v) ? v : []);
+  }
+  async function rememberUsedDocNo(cls, no) {
+    const n = parseInt(String(no).trim(), 10);
+    if (!Number.isFinite(n)) return;
+    const set = await getUsedDocNos();
+    const k = cls + '|' + n;
+    if (set.has(k)) return;
+    set.add(k);
+    await global.DB.setSetting('usedDocNos', [...set].slice(-5000));
+  }
+
+  /**
+   * Shared approval core (used by approve & replace-approved).
+   * MUST run inside DB.atomic over [permits, transactions, products, reels,
+   * audit, settings] with `allRows` already fetched. Every next IndexedDB
+   * request is queued from inside the previous request's onsuccess handler
+   * (no timers, no promise gaps) so the transaction can never auto-commit
+   * mid-flight.
+   */
+  function approveCore(t, permit, allRows, setFail, opts) {
+    const permitStore = t.objectStore('permits');
+    const txStore = t.objectStore('transactions');
+    const reelStore = t.objectStore('reels');
+    const prodStore = t.objectStore('products');
+    const settingsStore = t.objectStore('settings');
+    const errors = [];
+    const noNorm = cleanStr(permit.permitNo);
+    const ownGroupId = permit.groupId || null;
+
+    /* queue ALL reads synchronously: duplicate-permit lookup + every reel */
+    const reelIds = new Set();
+    for (const line of permit.lines || []) {
+      for (const id of (line.reelIds || [])) reelIds.add(id);
+    }
+    const reelGets = new Map();
+    for (const id of reelIds) reelGets.set(id, reelStore.get(id));
+    const pkGet = permitStore.index('permitKey').get(permitKeyOf(permit));
+
+    let pending = reelGets.size + 1;
+    const step = () => { if (--pending > 0) return; finish(); };
+    for (const [, req] of reelGets) req.onsuccess = step;
+    if (reelGets.size === 0) { /* pkGet still counted */ }
+    pkGet.onsuccess = step;
+
+    function finish() {
+      /* ---- 1) duplicate-number gates ---- */
+      const taken = allRows.some((r) => (Number(r.outQty) || 0) > 0
+        && (!ownGroupId || r.groupId !== ownGroupId)
+        && (r.settlement || '') === permit.cls
+        && String(r.permitNo || '').trim() === noNorm);
+      const dupPermit = pkGet.result;
+      if (dupPermit && dupPermit.id !== permit.id && dupPermit.status === 'approved') {
+        errors.push(`رقم الإذن "${noNorm}" معتمد مسبقًا في التسلسل ${permit.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'} — اختر رقمًا آخر`);
+      }
+      if (taken) {
+        errors.push(`رقم الإذن "${noNorm}" مستخدم مسبقًا في ${permit.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'} — اختر رقمًا آخر`);
+      }
+      /* ---- 2) reel-level gate: منع صرف بكرة مرتين ---- */
+      for (const line of permit.lines || []) {
+        for (const id of (line.reelIds || [])) {
+          const reel = reelGets.get(id).result;
+          if (!reel) {
+            errors.push('بكرة محددة غير موجودة في المخزون — أعد تحديد البكر من القائمة');
+          } else if (reel.status === 'dispatched') {
+            if (!(ownGroupId && reel.permitRef && reel.permitRef.permitId === permit.id)) {
+              errors.push(`البكرة ${reel.rollNo}/${reel.reelNo} مصروفة بالفعل — لا يمكن صرفها مرتين`);
+            }
+          } else if (reel.status !== 'available') {
+            errors.push(`البكرة ${reel.rollNo}/${reel.reelNo} حالتها «غير محددة» (بكرة تاريخية مستوردة) — لا يمكن صرفها بالتتبع الفردي`);
+          }
+        }
+      }
+      if (errors.length) { setFail({ type: 'validation', errors }); t.abort(); return; }
+
+      /* ---- 3) movement rows: weight = actual reel weights when selected ---- */
+      const rows = permitLinesToRows(permit, (id) => {
+        const reel = reelGets.get(id);
+        return reel && reel.result ? (Number(reel.result.weight) || 0) : 0;
+      });
+      /* ---- 4) 3-dim availability gate (matches the balance report) ---- */
+      errors.push(...checkAvailability3D(allRows, rows, ownGroupId));
+      if (errors.length) { setFail({ type: 'validation', errors }); t.abort(); return; }
+
+      /* ---- 5) free reels no longer selected (re-approval of an edit) ---- */
+      const oldReelIds = (opts && opts.oldReelIds) || [];
+      const newReelIds = new Set(reelIds);
+      for (const oldId of oldReelIds) {
+        if (newReelIds.has(oldId)) continue;
+        const g = reelStore.get(oldId);
+        g.onsuccess = () => {
+          if (g.result && g.result.status === 'dispatched'
+            && g.result.permitRef && g.result.permitRef.permitId === permit.id) {
+            reelStore.put(Object.assign({}, g.result, { status: 'available', permitRef: null, updatedAt: new Date().toISOString() }));
+          }
+        };
+      }
+      /* ---- 6) dispatch the selected reels ---- */
+      for (const id of newReelIds) {
+        const g = reelGets.get(id);
+        const reel = g.result;
+        reelStore.put(Object.assign({}, reel, {
+          status: 'dispatched',
+          permitRef: { permitId: permit.id, permitNo: noNorm, cls: permit.cls, customer: permit.customer, date: permit.date },
+          updatedAt: new Date().toISOString(),
+        }));
+      }
+      /* ---- 7) movement rows + master + counter + snapshot + audit ---- */
+      rows.forEach((r) => {
+        r.fingerprint = 'permit|' + permit.id + '|' + r.quality + '|' + r.gsm + '|' + r.size;
+        txStore.add(r);
+      });
+      queueProductTopUp(prodStore, rows);
+      bumpSeqInTx(settingsStore, permit.cls, noNorm);
+      permit.status = 'approved';
+      permit.groupId = PERMIT_GROUP_PREFIX + permit.id;
+      permit.approvedAt = new Date().toISOString();
+      permit.totals = {
+        rolls: rows.reduce((s, r) => s + (Number(r.outQty) || 0), 0),
+        weightKg: global.CALC.round6(rows.reduce((s, r) => s + (Number(r.weight) || 0), 0)),
+        weightEstimated: rows.every((r) => r.weight == null),
+      };
+      permitStore.put(permit);
+      t.objectStore('audit').add({
+        entity: 'permit', action: 'approve', entityId: permit.id,
+        before: null, after: { permitNo: noNorm, cls: permit.cls, customer: permit.customer, totals: permit.totals },
+        at: new Date().toISOString(),
+        details: `اعتماد إذن صرف ${noNorm} (${permit.cls === 'ض' ? 'ضريبي' : 'غير ضريبي'}) — ${permit.customer} — ${permit.totals.rolls} بكرة`,
+      });
+      rememberUsedDocNo(permit.cls, noNorm); /* fire-and-forget (separate tx) */
+    }
+  }
+
+  /* ---------- save draft (no stock effect) ---------- */
+  /* يقبل الحقل باسمي permitNo (API) أو docNo (نموذج الواجهة) */
+  function normPermitInput(input) {
+    return Object.assign({}, input, { permitNo: cleanStr(input.permitNo != null ? input.permitNo : input.docNo) });
+  }
+
+  async function savePermitDraft(input0) {
+    const input = normPermitInput(input0);
+    const permit = {
+      id: uuid(),
+      permitNo: cleanStr(input.permitNo),
+      cls: input.cls,
+      customer: cleanStr(input.customer),
+      date: cleanStr(input.date),
+      notes: cleanStr(input.notes || ''),
+      status: 'draft',
+      lines: input.lines || [],
+      groupId: null,
+      source: input.source || 'permit',
+      createdAt: new Date().toISOString(),
+      approvedAt: null,
+    };
+    const errors = validatePermit(permit);
+    if (errors.length) return Promise.reject({ type: 'validation', errors });
+    /* duplicate-number check against permits + stored movements */
+    const [permits, txRows] = await Promise.all([
+      global.DB.getAll('permits'), global.DB.getAll('transactions'),
+    ]);
+    const clashPermit = permits.find((p) => p.id !== permit.id && permitKeyOf(p) === permitKeyOf(permit));
+    if (clashPermit) {
+      return Promise.reject({ type: 'validation', errors: [`رقم الإذن "${permit.permitNo}" مستخدم في تسلسل ${permit.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'} (إذن ${clashPermit.status === 'approved' ? 'معتمد' : 'مسودة'} للعميل ${clashPermit.customer})`] });
+    }
+    const clashTx = txRows.some((r) => (Number(r.outQty) || 0) > 0 && (r.settlement || '') === permit.cls
+      && String(r.permitNo || '').trim() === permit.permitNo);
+    if (clashTx) {
+      return Promise.reject({ type: 'validation', errors: [`رقم الإذن "${permit.permitNo}" مستخدم مسبقًا في ${permit.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'} (حركات محفوظة)`] });
+    }
+    permit.permitKey = permitKeyOf(permit);
+    await global.DB.put('permits', permit);
+    await global.DB.logAudit({ entity: 'permit', action: 'draft', entityId: permit.id, before: null,
+      after: { permitNo: permit.permitNo, cls: permit.cls, customer: permit.customer },
+      details: `حفظ مسودة إذن صرف ${permit.permitNo} — لا خصم من الرصيد قبل الاعتماد` });
+    return permit;
+  }
+
+  async function updatePermitDraft(permitId, input0) {
+    const input = normPermitInput(input0);
+    const before = await global.DB.get('permits', permitId);
+    if (!before) return Promise.reject(new Error('الإذن غير موجود'));
+    if (before.status !== 'draft') {
+      return Promise.reject({ type: 'validation', errors: ['هذا الإذن معتمد — استخدم «تعديل إذن معتمد» لتعديله بأثر على الرصيد.'] });
+    }
+    const merged = Object.assign({}, before, {
+      permitNo: cleanStr(input.permitNo),
+      cls: input.cls,
+      customer: cleanStr(input.customer),
+      date: cleanStr(input.date),
+      notes: cleanStr(input.notes || ''),
+      lines: input.lines || [],
+    });
+    const errors = validatePermit(merged);
+    if (errors.length) return Promise.reject({ type: 'validation', errors });
+    const [permits, txRows] = await Promise.all([
+      global.DB.getAll('permits'), global.DB.getAll('transactions'),
+    ]);
+    const clashPermit = permits.find((p) => p.id !== permitId && permitKeyOf(p) === permitKeyOf(merged));
+    if (clashPermit) {
+      return Promise.reject({ type: 'validation', errors: [`رقم الإذن "${merged.permitNo}" مستخدم في تسلسل ${merged.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'} للعميل ${clashPermit.customer}`] });
+    }
+    const clashTx = txRows.some((r) => (Number(r.outQty) || 0) > 0 && (r.settlement || '') === merged.cls
+      && String(r.permitNo || '').trim() === merged.permitNo);
+    if (clashTx) {
+      return Promise.reject({ type: 'validation', errors: [`رقم الإذن "${merged.permitNo}" مستخدم مسبقًا في ${merged.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'} (حركات محفوظة)`] });
+    }
+    merged.permitKey = permitKeyOf(merged);
+    merged.updatedAt = new Date().toISOString();
+    await global.DB.put('permits', merged);
+    await global.DB.logAudit({ entity: 'permit', action: 'edit-draft', entityId: permitId, before, after: merged,
+      details: `تعديل مسودة إذن ${merged.permitNo}` });
+    return merged;
+  }
+
+  /* ---------- approve: deduct + flip reels (one atomic tx) ---------- */
+  function approvePermit(permitId) {
+    return global.DB.atomic(['permits', 'transactions', 'products', 'reels', 'audit', 'settings'], (t, setFail) => {
+      const g = t.objectStore('permits').get(permitId);
+      g.onsuccess = () => {
+        const permit = g.result;
+        if (!permit) { setFail(new Error('الإذن غير موجود')); t.abort(); return; }
+        if (permit.status !== 'draft') {
+          setFail({ type: 'validation', errors: ['الإذن معتمد بالفعل — لا يُخصم مرتين.'] });
+          t.abort(); return;
+        }
+        const errors = validatePermit(permit);
+        if (errors.length) { setFail({ type: 'validation', errors }); t.abort(); return; }
+        const allGet = t.objectStore('transactions').getAll();
+        allGet.onsuccess = () => {
+          approveCore(t, permit, allGet.result || [], setFail, { oldReelIds: [] });
+        };
+      };
+      return { ok: true };
+    }).then(() => global.DB.get('permits', permitId));
+  }
+
+  /* ---------- replace (draft update / approved re-deduct) ---------- */
+  function replacePermit(permitId, input0) {
+    const input = normPermitInput(input0);
+    return global.DB.atomic(['permits', 'transactions', 'products', 'reels', 'audit', 'settings'], (t, setFail) => {
+      const g = t.objectStore('permits').get(permitId);
+      g.onsuccess = () => {
+        const before = g.result;
+        if (!before) { setFail(new Error('الإذن غير موجود')); t.abort(); return; }
+        const merged = Object.assign({}, before, {
+          permitNo: cleanStr(input.permitNo),
+          cls: input.cls,
+          customer: cleanStr(input.customer),
+          date: cleanStr(input.date),
+          notes: cleanStr(input.notes || ''),
+          lines: input.lines || [],
+        });
+        const errors = validatePermit(merged);
+        if (errors.length) { setFail({ type: 'validation', errors }); t.abort(); return; }
+        if (before.status === 'draft') {
+          const txStore = t.objectStore('transactions');
+          const allGet = txStore.getAll();
+          allGet.onsuccess = () => {
+            const all = allGet.result || [];
+            const clashes = [];
+            const clashPermitKey = all.some((r) => (Number(r.outQty) || 0) > 0 && (r.settlement || '') === merged.cls
+              && String(r.permitNo || '').trim() === merged.permitNo);
+            const permitStore = t.objectStore('permits');
+            const pkGet = permitStore.index('permitKey').get(permitKeyOf(merged));
+            pkGet.onsuccess = () => {
+              const pk = pkGet.result;
+              if (pk && pk.id !== permitId) clashes.push(`رقم الإذن "${merged.permitNo}" مستخدم للعميل ${pk.customer}`);
+              if (clashPermitKey) clashes.push(`رقم الإذن "${merged.permitNo}" مستخدم مسبقًا في ${merged.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'} (حركات محفوظة)`);
+              if (clashes.length) { setFail({ type: 'validation', errors: clashes }); t.abort(); return; }
+              merged.permitKey = permitKeyOf(merged);
+              merged.updatedAt = new Date().toISOString();
+              permitStore.put(merged);
+              t.objectStore('audit').add({ entity: 'permit', action: 'edit-draft', entityId: permitId,
+                before, after: merged, at: new Date().toISOString(), details: `تعديل مسودة إذن ${merged.permitNo}` });
+            };
+          };
+          return;
+        }
+        /* approved: re-run full gates, free old reels, re-deduct */
+        const errors2 = [];
+        const txStore = t.objectStore('transactions');
+        const allGet = txStore.getAll();
+        allGet.onsuccess = () => {
+          const all = allGet.result || [];
+          /* collect old reel ids from permit lines (before overwrite) */
+          const oldReelIds = [];
+          for (const l of before.lines || []) for (const id of (l.reelIds || [])) oldReelIds.push(id);
+          const keptIdentity = cleanStr(merged.permitNo) === cleanStr(before.permitNo) && merged.cls === before.cls;
+          if (!keptIdentity) {
+            const permitStore = t.objectStore('permits');
+            const pkGet = permitStore.index('permitKey').get(permitKeyOf(merged));
+            pkGet.onsuccess = () => {
+              const pk = pkGet.result;
+              if (pk && pk.id !== permitId && pk.status === 'approved') {
+                errors2.push(`رقم الإذن "${merged.permitNo}" معتمد مسبقًا للعميل ${pk.customer}`);
+              }
+              const taken = all.some((r) => (Number(r.outQty) || 0) > 0 && r.groupId !== before.groupId
+                && (r.settlement || '') === merged.cls
+                && String(r.permitNo || '').trim() === merged.permitNo);
+              if (taken) errors2.push(`رقم الإذن "${merged.permitNo}" مستخدم مسبقًا في ${merged.cls === 'ض' ? 'الضريبي' : 'غير الضريبي'}`);
+              if (errors2.length) { setFail({ type: 'validation', errors: errors2 }); t.abort(); return; }
+              /* delete old movement rows, free old reels */
+              const oldRows = all.filter((r) => r.groupId === before.groupId);
+              oldRows.forEach((r) => txStore.delete(r.id));
+              merged.permitKey = permitKeyOf(merged);
+              merged.status = 'draft'; /* re-approved below by approveCore */
+              merged.groupId = null;
+              merged.approvedAt = null;
+              merged.updatedAt = new Date().toISOString();
+              t.objectStore('permits').put(merged);
+              approveCore(t, merged, all.filter((r) => r.groupId !== before.groupId), setFail, { oldReelIds });
+              t.objectStore('audit').add({ entity: 'permit', action: 'edit', entityId: permitId,
+                before, after: merged, at: new Date().toISOString(), details: `تعديل إذن معتمد ${merged.permitNo} وإعادة احتساب الصرف` });
+            };
+          } else {
+            const oldRows = all.filter((r) => r.groupId === before.groupId);
+            oldRows.forEach((r) => txStore.delete(r.id));
+            merged.permitKey = permitKeyOf(merged);
+            merged.status = 'draft';
+            merged.groupId = null;
+            merged.approvedAt = null;
+            merged.updatedAt = new Date().toISOString();
+            t.objectStore('permits').put(merged);
+            approveCore(t, merged, all.filter((r) => r.groupId !== before.groupId), setFail, { oldReelIds });
+            t.objectStore('audit').add({ entity: 'permit', action: 'edit', entityId: permitId,
+              before, after: merged, at: new Date().toISOString(), details: `تعديل إذن معتمد ${merged.permitNo} وإعادة احتساب الصرف` });
+          }
+        };
+      };
+      return { ok: true };
+    }).then(() => global.DB.get('permits', permitId));
+  }
+
+  /* ---------- delete permit (restore stock + reels) ---------- */
+  function deletePermit(permitId) {
+    return global.DB.atomic(['permits', 'transactions', 'reels', 'audit'], (t, setFail) => {
+      const g = t.objectStore('permits').get(permitId);
+      g.onsuccess = () => {
+        const permit = g.result;
+        if (!permit) { setFail(new Error('الإذن غير موجود')); t.abort(); return; }
+        const reelStore = t.objectStore('reels');
+        if (permit.status === 'approved' && permit.groupId) {
+          const txStore = t.objectStore('transactions');
+          const byGroup = txStore.index('groupId').getAll(permit.groupId);
+          byGroup.onsuccess = () => {
+            const rows = byGroup.result || [];
+            rows.forEach((r) => txStore.delete(r.id));
+            /* free reels referenced by the permit */
+            const reelIds = [];
+            for (const l of permit.lines || []) for (const id of (l.reelIds || [])) reelIds.push(id);
+            reelIds.forEach((id) => {
+              const rg = reelStore.get(id);
+              rg.onsuccess = () => {
+                if (rg.result && rg.result.status === 'dispatched'
+                  && (!rg.result.permitRef || rg.result.permitRef.permitId === permitId)) {
+                  reelStore.put(Object.assign({}, rg.result, { status: 'available', permitRef: null, updatedAt: new Date().toISOString() }));
+                }
+              };
+            });
+            t.objectStore('permits').delete(permitId);
+            t.objectStore('audit').add({ entity: 'permit', action: 'delete', entityId: permitId,
+              before: permit, after: null, at: new Date().toISOString(),
+              details: `حذف إذن صرف ${permit.permitNo} (${permit.cls === 'ض' ? 'ضريبي' : 'غير ضريبي'}) — ${permit.customer} — عودة الكميات والبكر للرصيد` });
+          };
+        } else {
+          t.objectStore('permits').delete(permitId);
+          t.objectStore('audit').add({ entity: 'permit', action: 'delete', entityId: permitId,
+            before: permit, after: null, at: new Date().toISOString(),
+            details: `حذف مسودة إذن ${permit.permitNo} — لم يكن له أثر على الرصيد` });
+        }
+      };
+      return { ok: true };
+    });
+  }
+
+  /* find available reels for the issue form's reel picker */
+  async function findAvailableReels(quality, gsm, size) {
+    const all = await global.DB.getAll('reels');
+    const q = cleanStr(quality);
+    const g = Number(gsm), s = Number(size);
+    return all
+      .filter((r) => r.status === 'available'
+        && cleanStr(r.quality) === q && Number(r.gram) === g && Number(r.size) === s)
+      .sort((a, b) => (a.rollNo - b.rollNo) || (a.reelNo - b.reelNo));
+  }
+
   global.TX = { fingerprint, validate, addTransaction, updateTransaction, deleteTransaction,
     setSettlement, ensureProduct, replaceMovement, deleteMovement,
     nextDocNumbers, checkIssueAvailability, saveProduction, saveIssueDocument,
-    replaceIssueDocument, replaceIssueVoucher, deleteIssueVoucher, CLS_LABEL, SEQ_KEYS };
+    replaceIssueDocument, replaceIssueVoucher, deleteIssueVoucher, CLS_LABEL, SEQ_KEYS,
+    /* rolls & reels */
+    REEL_STATUS, nextRollNo, saveRollWithReels, updateReel, deleteReel, deleteRoll,
+    importRolls, findAvailableReels,
+    /* permits */
+    savePermitDraft, updatePermitDraft, approvePermit, replacePermit, deletePermit,
+    permitLinesToRows, validatePermit, getUsedDocNos, PERMIT_GROUP_PREFIX };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = global.TX;
   }

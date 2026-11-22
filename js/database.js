@@ -1,21 +1,38 @@
 /* =========================================================================
    database.js — IndexedDB storage layer
-   نظام إدارة رصيد المخزن — طبقة قاعدة البيانات المحلية (IndexedDB)
+   Agrima — نظام إدارة المخزون والرولات والبكر والإنتاج وأذون الصرف
    -------------------------------------------------------------------------
-   Stores:
+   Stores (v1 — kept untouched, existing user data stays valid):
      products     { id, quality, gsm, size, source, createdAt }  (id auto)
      transactions { id, date, quality, gsm, size, customer, permitNo,
                     addQty, outQty, weight, settlement, notes,
                     source, excelRow, fingerprint, createdAt, updatedAt }
      audit        { id, entity, action, entityId, before, after, at, details }
      settings     { key, value }
+
+   Stores added in v2 (upgrade only CREATES new stores — never touches
+   existing records, so old data survives unchanged):
+     rolls        { id, rollNo (unique), gram, date, notes, source,
+                    createdAt, updatedAt }                (id auto)
+     reels        { id (uuid), rollNo, reelNo, size, weight, gram, quality,
+                    status: 'available'|'dispatched'|'undefined',
+                    permitRef, source, rollReel (unique "rollNo|reelNo"),
+                    createdAt, updatedAt }
+     permits      { id (uuid), permitNo, cls 'ض'|'غ', customer, date, notes,
+                    status: 'draft'|'approved', lines[], groupId,
+                    createdAt, approvedAt, source }
+     customers    { id, name (unique), notes, source, createdAt }
+     importlog    { key (file fingerprint), fileName, kind, at, summary }
    ========================================================================= */
 (function (global) {
   'use strict';
 
   const DB_NAME = 'inventory_pwa_db';
-  const DB_VERSION = 1; /* never bumped lightly: any change here MUST stay
-     backward-compatible with existing user databases (see README). */
+  /* v2: adds rolls / reels / permits / customers / importlog. The upgrade
+     handler below ONLY creates object stores & indexes — existing stores,
+     keys and records are never read, rewritten or deleted, so upgrading a
+     live user database is purely additive (safe migration). */
+  const DB_VERSION = 2;
 
   let _db = null;
   let _openPromise = null;
@@ -65,6 +82,8 @@
           s.createIndex('combo', 'combo', { unique: false });
           s.createIndex('customer', 'customer', { unique: false });
           s.createIndex('fingerprint', 'fingerprint', { unique: false });
+          s.createIndex('groupId', 'groupId', { unique: false });
+          s.createIndex('reelId', 'reelId', { unique: false });
         }
         if (!db.objectStoreNames.contains('audit')) {
           const s = db.createObjectStore('audit', { keyPath: 'id', autoIncrement: true });
@@ -73,6 +92,33 @@
         }
         if (!db.objectStoreNames.contains('settings')) {
           db.createObjectStore('settings', { keyPath: 'key' });
+        }
+        /* ---- v2 stores (rolls & bales & permits & customers) ---- */
+        if (!db.objectStoreNames.contains('rolls')) {
+          const s = db.createObjectStore('rolls', { keyPath: 'id', autoIncrement: true });
+          s.createIndex('rollNo', 'rollNo', { unique: true });
+          s.createIndex('date', 'date', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('reels')) {
+          const s = db.createObjectStore('reels', { keyPath: 'id' });
+          s.createIndex('rollNo', 'rollNo', { unique: false });
+          s.createIndex('status', 'status', { unique: false });
+          s.createIndex('rollReel', 'rollReel', { unique: true });
+          s.createIndex('quality', 'quality', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('permits')) {
+          const s = db.createObjectStore('permits', { keyPath: 'id' });
+          s.createIndex('status', 'status', { unique: false });
+          s.createIndex('cls', 'cls', { unique: false });
+          s.createIndex('date', 'date', { unique: false });
+          s.createIndex('permitKey', 'permitKey', { unique: true });
+        }
+        if (!db.objectStoreNames.contains('customers')) {
+          const s = db.createObjectStore('customers', { keyPath: 'id', autoIncrement: true });
+          s.createIndex('name', 'name', { unique: true });
+        }
+        if (!db.objectStoreNames.contains('importlog')) {
+          db.createObjectStore('importlog', { keyPath: 'key' });
         }
       };
       req.onsuccess = () => {
@@ -192,7 +238,14 @@
     wipeAll() {
       return Promise.all([
         DB.clear('products'), DB.clear('transactions'), DB.clear('audit'),
-      ]).then(() => DB.setSetting('lastImport', null));
+        DB.clear('rolls'), DB.clear('reels'), DB.clear('permits'),
+        DB.clear('customers'), DB.clear('importlog'),
+      ]).then(() => Promise.all([
+        DB.setSetting('lastImport', null),
+        DB.setSetting('docSeqTax', null),
+        DB.setSetting('docSeqNontax', null),
+        DB.setSetting('rollSeq', null),
+      ]));
     },
   };
 

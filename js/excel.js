@@ -13,7 +13,15 @@
    Sheet "انتاج و مبيعات" (header row 1: p | الوزن | رقم اذن الصرف | اسم الصنف |
                            اسم العميل | الجرام | المقاس | اضافه | صرف | (J)=H-I | تصفيه)
      A 'p'          → tx.date      (all cells are real Excel dates)
-     B 'الوزن'       → tx.weight   (kg, optional; 'لاغي' → null)
+     B 'الوزن'       → tx.weight   — UNIT VERIFIED AGAINST THE DETAILS FILE:
+                                     column B is recorded in TONS (e.g. 0.526 t
+                                     for roll 120001/1 which weighs 526 kg in
+                                     "اجمالي المخزن 2025.xlsx", and the 2025-01-01
+                                     day total 51.5 t equals 51,500 kg of rolls
+                                     produced that day). Values are converted
+                                     ×1000 to KILOGRAMS at import and flagged
+                                     weightUnit:'kg' so every screen and printed
+                                     voucher uses one consistent unit.
      C 'رقم اذن الصرف' → tx.permitNo
      D 'اسم الصنف'   → tx.quality
      E 'اسم العميل'  → tx.customer
@@ -24,6 +32,20 @@
      J (unnamed)     = =H-I        → net, recomputed by the app
      K 'تصفيه'       → tx.settlement ('غ'/'ض' annotation, not part of balance)
      L, M            → empty in the whole file (ignored)
+
+   FILE 2 — "اجمالي المخزن 2025.xlsx", sheet "اجمالي الاكواد":
+     A الكود          → "rollNo/reelNo" (e.g. 120001/1)
+     B قطر            → ignored (constant 125 in the whole file)
+     C طول            → reel.size (المقاس)
+     D جرام           → reel.gram
+     E وزن(طن)        → reel.weight — DESPITE THE HEADER this column is in
+                        KILOGRAMS (verified: roll 120001/1 = 526 which matches
+                        0.526 t in انتاج و مبيعات, and sheet totals match
+                        physical reel weights). Stored as kg, no conversion.
+     F تاريخ الانتاج   → roll/reel production date
+     G النوع          → quality (تست لينر معالج / توب لاينر)
+     Rolls from this file are DETAILS ONLY (حالة «غير محددة») — they never
+     touch the balance (قاعدة منع مضاعفة المخزون).
 
    Header synonyms are supported so slightly-edited files still import.
    ========================================================================= */
@@ -136,6 +158,39 @@
     return s === 'لاغي' || s === 'لاغى' || s === 'laghy';
   }
 
+  /* ---------- file fingerprint (بصمة الملف) ----------
+     SHA-256 of the raw bytes when the context is secure (GitHub Pages /
+     localhost), deterministic FNV-1a 64-bit fallback otherwise. Used to
+     block re-importing the exact same file twice. */
+  function fileFingerprint(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    if (global.crypto && global.crypto.subtle && global.crypto.subtle.digest) {
+      return global.crypto.subtle.digest('SHA-256', bytes).then((h) => {
+        return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      }).catch(() => Promise.resolve(fnv(bytes)));
+    }
+    return Promise.resolve(fnv(bytes));
+  }
+  function fnv(bytes) {
+    let h1 = 0x811c9dc5, h2 = 0x01000193;
+    for (let i = 0; i < bytes.length; i++) {
+      h1 = (h1 ^ bytes[i]) >>> 0;
+      h1 = (Math.imul(h1, 16777619)) >>> 0;
+      h2 = (h2 ^ ((bytes[i] + i) & 0xff)) >>> 0;
+      h2 = (Math.imul(h2, 16777619)) >>> 0;
+    }
+    return 'fnv-' + h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+  }
+
+  /* Unit constants — انتاج و مبيعات column B is TONS (verified against the
+     details file). Everything inside the app is KILOGRAMS. */
+  const TX_WEIGHT_UNIT_IN = 't'; /* source unit of column B */
+  function txWeightToKg(v) {
+    const n = Number(v);
+    if (!isFinite(n)) return null;
+    return Math.round(n * 1000 * 1000) / 1000; /* tons → kg, 3 decimals */
+  }
+
   /**
    * Parse the uploaded workbook into products + transactions.
    * @param {object} wb SheetJS workbook (cellDates:true recommended)
@@ -210,6 +265,8 @@
           }
           const voidRow = isVoid(quality);
           if (voidRow) stats.voidTx++;
+          /* column B unit is TONS (verified) → store kg with weightUnit flag */
+          const weightKg = typeof weightRaw === 'number' ? txWeightToKg(weightRaw) : null;
           const t = {
             date,
             quality: cleanStr(quality),
@@ -219,7 +276,9 @@
             permitNo: cleanStr(get(hdr.map.permitNo)),
             addQty,
             outQty,
-            weight: typeof weightRaw === 'number' ? weightRaw : null,
+            weight: weightKg,
+            weightUnit: weightKg === null ? null : 'kg',
+            weightSourceKg: weightKg === null ? null : Math.round(weightKg * 1000) / 1000,
             settlement: ['غ', 'ض'].includes(settlementRaw) ? settlementRaw : settlementRaw,
             notes: '',
             source: 'excel',
@@ -258,6 +317,107 @@
     }
 
     return { products, transactions, stats };
+  }
+
+  /* =========================== FILE 2: اجمالي المخزن ===========================
+     Parses ALL sheets of the details workbook. Rolls/reels are DETAILS ONLY:
+     they are stored in rolls/reels with status 'غير محددة' (undefined) and
+     NEVER touch the balance — الرصيد 2025 remains the only balance source. */
+  function parseWarehouseWorkbook(wb) {
+    const stats = {
+      sheets: wb.SheetNames.slice(),
+      rowsRead: 0, reels: 0, rolls: 0,
+      badCodes: 0, badCodeSamples: [],
+      emptyTypeRows: 0,
+      minRollNo: null, maxRollNo: null, minDate: null, maxDate: null,
+      totalWeightKg: 0, warnings: [],
+    };
+    const rollsMap = new Map(); /* rollNo → {rollNo, gram, date, reels: []} */
+    const reelSeen = new Set();
+    const canon = global.App && global.App.productFamily ? global.App.productFamily : (s) => String(s || '').trim();
+    for (const sheetName of wb.SheetNames) {
+      const ws = wb.Sheets[sheetName];
+      if (!ws || !ws['!ref']) continue;
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        const get = (c) => (ws[XLSX.utils.encode_cell({ r, c })] || {}).v;
+        const codeRaw = get(range.s.c);
+        const code = cleanStr(codeRaw);
+        if (!code || code === '*') continue;
+        const m = code.match(/^(\d+)\s*\/\s*(\d+)$/);
+        if (!m) {
+          if (norm(code).includes('الكود')) continue; /* header row */
+          if (cleanStr(get(range.s.c + 1)) === '' && cleanStr(get(range.s.c + 2)) === '') continue;
+          stats.badCodes++;
+          if (stats.badCodeSamples.length < 10) stats.badCodeSamples.push(code);
+          continue;
+        }
+        stats.rowsRead++;
+        const rollNo = parseInt(m[1], 10);
+        const reelNo = parseInt(m[2], 10);
+        const size = toNumber(get(range.s.c + 2));   /* طول → المقاس */
+        const gram = toNumber(get(range.s.c + 3));   /* جرام */
+        const weight = toNumber(get(range.s.c + 4)); /* وزن (كجم رغم العنوان طن) */
+        const pdate = excelDateToStr(get(range.s.c + 5));
+        const qualityRaw = cleanStr(get(range.s.c + 6)); /* النوع */
+        const quality = qualityRaw ? canon(qualityRaw) : '';
+        if (!quality) stats.emptyTypeRows++;
+        let roll = rollsMap.get(rollNo);
+        if (!roll) {
+          roll = { rollNo, gram: null, date: pdate, reels: [], source: 'excel' };
+          rollsMap.set(rollNo, roll);
+        }
+        const key = rollNo + '/' + reelNo;
+        if (reelSeen.has(key)) { stats.warnings.push(`بكرة مكررة داخل الملف تم تجاهلها: ${key}`); continue; }
+        reelSeen.add(key);
+        roll.reels.push({
+          rollNo, reelNo,
+          size: size > 0 ? size : null,
+          weight: weight > 0 ? weight : null,
+          gram: gram > 0 ? gram : null,
+          quality,
+          date: pdate,
+          status: 'undefined', /* بكر تاريخية — لا تُحسب في الرصيد */
+          source: 'excel',
+        });
+        stats.reels++;
+        stats.totalWeightKg += weight || 0;
+        if (stats.minRollNo === null || rollNo < stats.minRollNo) stats.minRollNo = rollNo;
+        if (stats.maxRollNo === null || rollNo > stats.maxRollNo) stats.maxRollNo = rollNo;
+        if (pdate && (stats.minDate === null || pdate < stats.minDate)) stats.minDate = pdate;
+        if (pdate && (stats.maxDate === null || pdate > stats.maxDate)) stats.maxDate = pdate;
+      }
+    }
+    const rolls = [...rollsMap.values()].map((roll) => {
+      const grams = [...new Set(roll.reels.map((x) => x.gram).filter((g) => g != null))];
+      return Object.assign(roll, {
+        gram: grams.length === 1 ? grams[0] : (grams.length ? null : null),
+        gramSet: grams,
+        reelCount: roll.reels.length,
+      });
+    });
+    stats.rolls = rolls.length;
+    return { rolls, stats };
+  }
+
+  function toNumber(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return isNaN(n) ? null : n;
+  }
+
+  /* =========================== IMPORT LOG ===========================
+     بصمة الملف لمنع الاستيراد المكرر — one record per imported file hash. */
+  async function checkFileImported(fingerprint) {
+    if (!fingerprint) return null;
+    return global.DB.get('importlog', fingerprint);
+  }
+
+  async function logFileImport(fingerprint, fileName, kind, summary) {
+    if (!fingerprint) return;
+    await global.DB.put('importlog', {
+      key: fingerprint, fileName, kind, at: new Date().toISOString(), summary,
+    });
   }
 
   /* ---------- import into IndexedDB with duplicate detection ---------- */
@@ -312,6 +472,11 @@
       entity: 'database', action: 'import', entityId: null, before: null, after: null,
       details: `newTx=${cls.newTx.length}, dupTx=${cls.dupTx.length}, inFileDup=${cls.inFileDup.length}, newProd=${cls.newProd.length}`,
     });
+    if (parsed.fileFingerprint) {
+      await logFileImport(parsed.fileFingerprint, parsed.fileName || 'الرصيد', 'balance', {
+        newTx: cls.newTx.length, dupTx: cls.dupTx.length, newProd: cls.newProd.length,
+      });
+    }
     await global.DB.setSetting('lastImport', {
       at: new Date().toISOString(),
       newTx: cls.newTx.length, dupTx: cls.dupTx.length, inFileDup: cls.inFileDup.length,
@@ -423,7 +588,8 @@
 
   global.EXCEL = {
     SYNONYMS_TX, SYNONYMS_PROD, norm, findSheet, mapColumns, findHeaderRow,
-    excelDateToStr, parseWorkbook, classifyImport, commitImport, buildTxSheet,
+    excelDateToStr, parseWorkbook, parseWarehouseWorkbook, classifyImport, commitImport,
+    fileFingerprint, checkFileImported, logFileImport, buildTxSheet,
     exportInventory, exportInventoryBuckets, exportTransactions, exportReportAOA, TX_EXPORT_HEADERS,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.EXCEL;

@@ -48,11 +48,23 @@
       node.querySelector('#imp-name').textContent = file.name;
       try {
         const buf = await file.arrayBuffer();
+        /* بصمة الملف لمنع الاستيراد المكرر (SHA-256 للمحتوى الفعلي) */
+        const fingerprint = await global.EXCEL.fileFingerprint(buf);
+        const already = await global.EXCEL.checkFileImported(fingerprint);
+        if (already && !replaceMode) {
+          errBox.textContent = lang()
+            ? `⛔ هذا الملف نفسه تم استيراده سابقًا (${new Date(already.at).toLocaleString('ar-EG')}): ${already.fileName}. الاستيراد المتكرر يمنع مضاعفة الرصيد — لتحديث الحركات استخدم الملف المحدّث (بصمته مختلفة) وسيُضاف الجديد فقط.`
+            : 'This exact file was already imported. Re-importing the same file is blocked to prevent stock duplication.';
+          commitBtn.disabled = true;
+          return;
+        }
         /* NOTE: read WITHOUT cellDates → date cells arrive as Excel serial
            numbers, which excelDateToStr converts deterministically in UTC
            (no timezone drift). */
         const wb = global.XLSX.read(buf);
         parsed = global.EXCEL.parseWorkbook(wb);
+        parsed.fileFingerprint = fingerprint;
+        parsed.fileName = file.name;
         existing = {
           tx: await global.DB.getAll('transactions'),
           prod: await global.DB.getAll('products'),
@@ -146,7 +158,7 @@
         </div>
         <div class="card">
           <h3>💾 ${lang() ? 'نسخة احتياطية كاملة (JSON)' : 'Full JSON backup'}</h3>
-          <p class="muted">${lang() ? `تحتوي على كل الأصناف والحركات والإعدادات (${fmtNum(App.state.products.length)} صنف — ${fmtNum(App.state.transactions.length)} حركة).` : `Contains all products, transactions and settings.`}</p>
+          <p class="muted">${lang() ? `تشمل: الرصيد الافتتاحي، الحركات، الرولات، البكر وحالاتها، أذون الصرف والتسلسلين، العملاء، الأصناف والإعدادات (${fmtNum(App.state.transactions.length)} حركة — ${(App.state.permits || []).length} إذن).` : `Full backup of every store.`}</p>
           <div class="btn-row">
             <button class="btn btn-primary" id="bk-dl">💾 ${lang() ? 'تنزيل نسخة احتياطية' : 'Download backup'}</button>
             <button class="btn btn-warn" id="bk-restore">♻️ ${lang() ? 'استعادة من ملف' : 'Restore from file'}</button>
@@ -194,13 +206,17 @@
 
     /* ---------- JSON backup / restore ---------- */
     async function downloadBackup() {
-      const [products, transactions, settings, audit] = await Promise.all([
+      const [products, transactions, settings, audit, rolls, reels, permits, customers, importlog] = await Promise.all([
         global.DB.getAll('products'), global.DB.getAll('transactions'),
         global.DB.getAll('settings'), global.DB.getAudit(2000),
+        global.DB.getAll('rolls'), global.DB.getAll('reels'),
+        global.DB.getAll('permits'), global.DB.getAll('customers'),
+        global.DB.getAll('importlog'),
       ]);
       const payload = {
-        app: 'inventory-pwa', schema: 1, exportedAt: new Date().toISOString(),
+        app: 'inventory-pwa', schema: 2, exportedAt: new Date().toISOString(),
         products, transactions, settings, audit: audit.slice(0, 200),
+        rolls, reels, permits, customers, importlog,
       };
       const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
       const a = document.createElement('a');
@@ -218,20 +234,28 @@
         const text = await file.text();
         const data = JSON.parse(text);
         if (data.app !== 'inventory-pwa' || !Array.isArray(data.transactions)) {
-          toast(lang() ? 'ملف النسخة الاحتياطية غير صالح' : 'invalid backup file', 'err');
+          toast(lang() ? 'ملف النسخة الاحتياطية غير صالح (فحص السلامة لم ينجح)' : 'invalid backup file', 'err');
           return;
         }
+        /* تحذير + نسخة من البيانات الحالية قبل الاستبدال */
+        toast(lang() ? 'سيتم أولًا تنزيل نسخة تلقائية من بياناتك الحالية قبل الاستبدال…' : 'Downloading an automatic backup of current data first…', 'info', 5000);
+        await downloadBackup();
         const ok = await confirmDialog({
           title: lang() ? 'استعادة نسخة احتياطية' : 'Restore backup',
           message: lang()
-            ? `سيتم استبدال جميع البيانات الحالية بمحتوى النسخة (${fmtNum(data.transactions.length)} حركة، ${fmtNum((data.products || []).length)} صنف). متابعة؟`
-            : `Replace all current data with the backup (${data.transactions.length} transactions)? Continue?`,
-          danger: true,
+            ? `⚠ تحذير: سيتم استبدال جميع البيانات الحالية بمحتوى النسخة (${fmtNum(data.transactions.length)} حركة، ${fmtNum((data.products || []).length)} صنف، ${fmtNum((data.rolls || []).length)} رول، ${fmtNum((data.permits || []).length)} إذن). تم تنزيل نسخة تلقائية من بياناتك الحالية الآن. متابعة؟`
+            : `Replace ALL current data with the backup? An automatic backup was downloaded first. Continue?`,
+          danger: true, yesLabel: lang() ? 'استبدال البيانات' : 'Replace data',
         });
         if (!ok) return;
         await global.DB.wipeAll();
         await global.DB.bulkPut('products', data.products || []);
         await global.DB.bulkPut('transactions', data.transactions || []);
+        await global.DB.bulkPut('rolls', data.rolls || []);
+        await global.DB.bulkPut('reels', data.reels || []);
+        await global.DB.bulkPut('permits', data.permits || []);
+        await global.DB.bulkPut('customers', data.customers || []);
+        await global.DB.bulkPut('importlog', data.importlog || []);
         for (const s of data.settings || []) await global.DB.put('settings', s);
         await global.DB.logAudit({
           entity: 'database', action: 'restore', entityId: null, before: null, after: null,
@@ -375,6 +399,191 @@
     });
   }
 
+  /* ================= الاستيراد والتصدير ================= */
+  function renderImportExport(host) {
+    host.innerHTML = `
+      <div class="page-head"><h2>${lang() ? 'الاستيراد والتصدير' : 'Import & Export'}</h2></div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>📥 ${lang() ? 'ملف «الرصيد 2025» — مصدر الرصيد الافتتاحي والحركات' : 'Balance file (opening + movements)'}</h3>
+          <p class="muted small">${lang() ? 'يستورد شيت «انتاج و مبيعات» كاملًا (رصيد أول المدة + الإنتاج + الصرف) وشيت «الرصيد» كقائمة أصناف مرجعية. الرصيد يُحسب من الحركات ولا يُجمع أبدًا مع ملف التفاصيل. بصمة الملف تمنع إعادة استيراد الملف نفسه، والصفوف المكررة تُتخطى تلقائيًا.'
+            : 'Imports the movements sheet (opening + production + dispatch). Balance is computed from movements only.'}</p>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="ie-bal">📥 ${lang() ? 'استيراد وإضافة' : 'Import & merge'}</button>
+            <button class="btn btn-warn" id="ie-bal-replace">♻️ ${lang() ? 'استيراد مع الاستبدال' : 'Import & replace'}</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>🗂 ${lang() ? 'ملف «اجمالي المخزن 2025» — تفاصيل الرولات والبكر' : 'Warehouse details file (rolls & reels)'}</h3>
+          <p class="muted small">${lang() ? 'يقرأ شيت «اجمالي الاكواد»: رقم الرول/البكرة، المقاس، الوزن (كجم)، الجرام، الصنف، تاريخ الإنتاج. يُخزن كسجل تفاصيل فقط بحالة «غير محددة» — لا يضاف إلى الرصيد مرة أخرى (قاعدة منع مضاعفة المخزون). البكر التي يتعذر ربطها برصيد افتتاحي تبقى غير محددة.'
+            : 'Parses all sheets into roll/reel detail records with status «undefined» — never added to the balance.'}</p>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="ie-wh">🗂 ${lang() ? 'استيراد التفاصيل' : 'Import details'}</button>
+          </div>
+          <div id="ie-lastwh" class="muted small"></div>
+        </div>
+        <div class="card">
+          <h3>📤 ${lang() ? 'تصدير Excel' : 'Excel export'}</h3>
+          <p class="muted">${lang() ? 'تصدير الأرصدة أو سجل الحركات أو الرولات والبكر أو أذون الصرف.' : 'Export balances, movements, rolls & reels or permits.'}</p>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="ie-exp-inv">📊 ${lang() ? 'الأرصدة' : 'Balances'}</button>
+            <button class="btn btn-primary" id="ie-exp-tx">🧾 ${lang() ? 'الحركات' : 'Movements'}</button>
+            <button class="btn btn-primary" id="ie-exp-rolls">🗂 ${lang() ? 'الرولات والبكر' : 'Rolls & reels'}</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>ℹ️ ${lang() ? 'قاعدة منع مضاعفة المخزون' : 'No-double-count rule'}</h3>
+          <p class="muted small">${lang() ? 'الرصيد 2025 = مصدر الرصيد الافتتاحي والحركات. اجمالي المخزن 2025 = مصدر تفاصيل الرولات والبكر فقط. لا يجمع التطبيق عدد البكر في الملفين أبدًا، والبكر القديمة غير القابلة للربط تبقى «غير محددة» ولا تضاف للرصيد تلقائيًا.'
+            : 'The balance file is the only balance source; the details file never adds stock.'}</p>
+        </div>
+      </div>`;
+    global.DB.getSetting('lastWarehouseImport', null).then((li) => {
+      const box = host.querySelector('#ie-lastwh');
+      if (li && box) {
+        box.textContent = lang()
+          ? `آخر استيراد تفاصيل: ${new Date(li.at).toLocaleString('ar-EG')} — ${li.fileName} — رولات: ${li.rolls} — بكر: ${li.reels}`
+          : `Last details import: ${li.at} — ${li.fileName}`;
+      }
+    });
+    host.querySelector('#ie-bal').addEventListener('click', () => openImportDialog(false));
+    host.querySelector('#ie-bal-replace').addEventListener('click', () => openImportDialog(true));
+    host.querySelector('#ie-wh').addEventListener('click', () => openWarehouseDialog());
+    host.querySelector('#ie-exp-inv').addEventListener('click', () => {
+      global.EXCEL.exportInventoryBuckets([...App.state.balancesW.values()], App.state.settings.weightFactor);
+      toast(lang() ? 'تم التنزيل' : 'downloaded', 'ok');
+    });
+    host.querySelector('#ie-exp-tx').addEventListener('click', () => {
+      global.EXCEL.exportTransactions(App.state.transactions);
+      toast(lang() ? 'تم التنزيل' : 'downloaded', 'ok');
+    });
+    host.querySelector('#ie-exp-rolls').addEventListener('click', async () => {
+      const [rolls, reels] = await Promise.all([global.DB.getAll('rolls'), global.DB.getAll('reels')]);
+      const byRoll = new Map();
+      for (const r of reels) {
+        if (!byRoll.has(r.rollNo)) byRoll.set(r.rollNo, []);
+        byRoll.get(r.rollNo).push(r);
+      }
+      const rows = [];
+      rolls.slice().sort((a, b) => a.rollNo - b.rollNo).forEach((roll) => {
+        (byRoll.get(roll.rollNo) || []).sort((a, b) => a.reelNo - b.reelNo).forEach((x) => {
+          rows.push([roll.rollNo, roll.date || '', x.reelNo, x.size == null ? '' : x.size,
+            x.weight == null ? '' : x.weight, x.gram == null ? '' : x.gram,
+            x.quality || '', global.TX.REEL_STATUS[x.status] || x.status, x.source === 'excel' ? (lang() ? 'مستوردة' : 'imported') : (lang() ? 'تسجيل بكر' : 'app')]);
+        });
+      });
+      global.EXCEL.exportReportAOA(lang() ? 'الرولات والبكر' : 'Rolls & reels',
+        [lang() ? 'رقم الرول' : 'Roll', lang() ? 'تاريخ الرول' : 'Roll date', lang() ? 'رقم البكرة' : 'Reel',
+         t('size'), `${ar_() ? 'الوزن (كجم)' : 'Weight (kg)'}`, t('gsm'), t('quality'), lang() ? 'الحالة' : 'Status', lang() ? 'المصدر' : 'Source'],
+        rows, null, 'الرولات_والبكر');
+      toast(lang() ? 'تم التنزيل' : 'downloaded', 'ok');
+    });
+    function ar_() { return lang(); }
+  }
+
+  /* ---------- استيراد ملف اجمالي المخزن (تفاصيل الرولات والبكر) ---------- */
+  function openWarehouseDialog() {
+    const node = el(`<div class="import-dialog">
+      <p class="muted">${lang()
+        ? 'ارفع ملف «اجمالي المخزن 2025.xlsx». ستُعرض معاينة (عدد الرولات والبكر وأعلى رقم رول) قبل الحفظ. التفاصيل لا تدخل الرصيد إطلاقًا.'
+        : 'Upload the warehouse details file. A preview is shown before saving. Details never touch the balance.'}</p>
+      <div class="import-zone" id="wh-zone">
+        <input type="file" id="wh-file" accept=".xlsx,.xls" hidden>
+        <div class="drop-hint">📁 ${lang() ? 'اختر الملف أو اسحبه هنا' : 'Choose or drop the file'}</div>
+        <div class="file-name" id="wh-name"></div>
+      </div>
+      <div id="wh-preview"></div>
+      <div class="form-error" id="wh-error" role="alert"></div>
+      <div class="confirm-actions">
+        <button class="btn btn-primary" id="wh-commit" disabled>${lang() ? 'حفظ التفاصيل' : 'Save details'}</button>
+        <button class="btn btn-ghost" id="wh-cancel">${t('cancel')}</button>
+      </div></div>`);
+    openModal(node, { title: lang() ? 'استيراد تفاصيل الرولات والبكر' : 'Import rolls & reels details', wide: true });
+
+    const zone = node.querySelector('#wh-zone');
+    const fileIn = node.querySelector('#wh-file');
+    const commitBtn = node.querySelector('#wh-commit');
+    const errBox = node.querySelector('#wh-error');
+    let parsed = null, fingerprint = null;
+
+    zone.addEventListener('click', () => fileIn.click());
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+    zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('drag'); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+    fileIn.addEventListener('change', () => { if (fileIn.files[0]) handleFile(fileIn.files[0]); });
+    node.querySelector('#wh-cancel').addEventListener('click', closeModal);
+
+    async function handleFile(file) {
+      errBox.textContent = '';
+      node.querySelector('#wh-name').textContent = file.name;
+      try {
+        const buf = await file.arrayBuffer();
+        fingerprint = await global.EXCEL.fileFingerprint(buf);
+        const already = await global.EXCEL.checkFileImported(fingerprint);
+        if (already) {
+          errBox.textContent = lang()
+            ? `⛔ هذا الملف نفسه تم استيراده سابقًا (${new Date(already.at).toLocaleString('ar-EG')}). لا حاجة لإعادة الاستيراد — التفاصيل موجودة في «إدارة الرولات والبكر».`
+            : 'This exact file was already imported.';
+          commitBtn.disabled = true;
+          return;
+        }
+        const wb = global.XLSX.read(buf);
+        parsed = global.EXCEL.parseWarehouseWorkbook(wb);
+        const s = parsed.stats;
+        node.querySelector('#wh-preview').innerHTML = `
+          <div class="import-stats">
+            <div class="imp-line"><strong>${lang() ? 'الشيتات' : 'Sheets'}:</strong> ${s.sheets.map(esc).join(' · ')}</div>
+            <div class="imp-grid">
+              <div class="stat-mini"><span>${lang() ? 'رولات في الملف' : 'Rolls in file'}</span><strong>${fmtNum(parsed.rolls.length)}</strong></div>
+              <div class="stat-mini"><span>${lang() ? 'بكر في الملف' : 'Reels in file'}</span><strong>${fmtNum(s.reels)}</strong></div>
+              <div class="stat-mini"><span>${lang() ? 'أعلى رقم رول' : 'Max roll no.'}</span><strong>${s.maxRollNo == null ? '—' : fmtNum(s.maxRollNo)}</strong></div>
+              <div class="stat-mini"><span>${lang() ? 'إجمالي الوزن (كجم)' : 'Total weight (kg)'}</span><strong>${fmtNum(s.totalWeightKg, 0)}</strong></div>
+              <div class="stat-mini warn"><span>${lang() ? 'بكر بلا صنف' : 'Reels without type'}</span><strong>${fmtNum(s.emptyTypeRows)}</strong></div>
+              <div class="stat-mini"><span>${lang() ? 'الفترة' : 'Date range'}</span><strong>${s.minDate || '—'} → ${s.maxDate || '—'}</strong></div>
+            </div>
+            <div class="imp-warnings">
+              <div>ℹ️ ${lang() ? 'ستُحفظ كل البكر بحالة «غير محددة» — سجل تفاصيل فقط لا يدخل الرصيد، ولن يُضاعف المخزون.' : 'All reels saved as «undefined» — details only.'}</div>
+              ${s.badCodes ? `<div>⚠ ${lang() ? 'أكواد غير مفهومة تم تخطيها' : 'skipped codes'}: ${fmtNum(s.badCodes)}</div>` : ''}
+            </div>
+          </div>`;
+        commitBtn.disabled = false;
+      } catch (e) {
+        console.error(e);
+        errBox.textContent = lang() ? `فشل قراءة الملف: ${e.message}` : `Failed to read: ${e.message}`;
+      }
+    }
+
+    commitBtn.addEventListener('click', async () => {
+      if (!parsed) return;
+      commitBtn.disabled = true;
+      commitBtn.textContent = lang() ? 'جاري الحفظ…' : 'Saving…';
+      try {
+        const res = await global.TX.importRolls(parsed.rolls, parsed.stats.sheets.join(' / '));
+        await global.EXCEL.logFileImport(fingerprint, node.querySelector('#wh-name').textContent, 'warehouse', {
+          rolls: res.rolls, reels: res.reels, skipped: res.skipped,
+        });
+        await global.DB.setSetting('lastWarehouseImport', {
+          at: new Date().toISOString(),
+          fileName: node.querySelector('#wh-name').textContent,
+          rolls: res.rolls, reels: res.reels,
+        });
+        await global.DB.logAudit({
+          entity: 'database', action: 'import-warehouse', entityId: null, before: null, after: null,
+          details: `استيراد التفاصيل: رولات ${res.rolls}، بكر ${res.reels}، متخطى ${res.skipped}`,
+        });
+        closeModal();
+        toast(lang()
+          ? `تم استيراد التفاصيل: ${fmtNum(res.rolls)} رول و ${fmtNum(res.reels)} بكرة بحالة «غير محددة» — الرصيد لم يتغير${res.skipped ? ` (تم تخطي ${fmtNum(res.skipped)} رول موجود مسبقًا)` : ''}`
+          : `Imported ${res.rolls} rolls / ${res.reels} reels as details`, 'ok', 6000);
+        await App.refresh();
+      } catch (e) {
+        console.error(e);
+        errBox.innerHTML = (e && e.errors ? e.errors : [String(e.message || e)]).map((x) => `• ${esc(x)}`).join('<br>');
+        commitBtn.disabled = false;
+      }
+    });
+  }
+
+  global.App.registerView('import', renderImportExport);
   global.App.registerView('backup', renderBackup);
   global.App.registerView('settings', renderSettings);
 })(window);

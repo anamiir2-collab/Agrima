@@ -6,7 +6,7 @@
    as-of date, and never treats already-issued bales as available stock.
    8 report types · A4 pagination with real page numbers · repeated table
    headers on every page · signature spaces · window.print() · Excel export
-   Zero values are hidden in report rows; product families show once.
+   Zero and negative stock are excluded from the warehouse report; families show once.
    ========================================================================= */
 (function (global) {
   'use strict';

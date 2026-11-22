@@ -1481,15 +1481,23 @@
     /* PWA service worker — registered after the app renders so a slow SW
        can never block first paint; updates prompt instead of blocking. */
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-      navigator.serviceWorker.register('sw.js').then((reg) => {
+      let reloadingForWorker = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloadingForWorker) return;
+        reloadingForWorker = true;
+        location.reload();
+      });
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(async (reg) => {
         console.log('[sw] registered, scope', reg.scope);
+        /* Check the worker script on every app launch, bypassing HTTP cache. */
+        await reg.update().catch(() => {});
+        if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
         reg.addEventListener('updatefound', () => {
           const nw = reg.installing;
           if (!nw) return;
           nw.addEventListener('statechange', () => {
             if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-              console.log('[sw] new version waiting');
-              toast(UI.getLang() === 'ar' ? 'تحديث جديد متاح — أعد تحميل الصفحة للتطبيق عليه' : 'Update available — reload to apply', 'info', 8000);
+              nw.postMessage('SKIP_WAITING');
             }
           });
         });

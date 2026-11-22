@@ -78,3 +78,13 @@
   .doc-total .doc-total-num { color: #000 !important; }
   .doc-notes { color: #000 !important; }
 }
+
+/* Agrima v7 — إخفاء عناصر التحكم الجديدة عند الطباعة + علامة المسودة */
+.reel-picker, .picker-list, .line-btns, .form-actions, .form-error,
+.page-head, .card.filters, .pager, #toast-host, .modal-overlay,
+.l-remove, .l-pick { display: none !important; }
+
+.print-page .draft-watermark { display: flex !important; }
+.doc-draft .rp-title { color: #000 !important; }
+.rp-est { font-weight: 700; }
+.doc-issue-table th, .doc-issue-table td { padding: 4px 8px !important; }

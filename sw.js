@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'inv-pwa-v10-voucher';
+const CACHE = 'inv-pwa-v11-issuedoc';
 
 const PRECACHE = [
   './',

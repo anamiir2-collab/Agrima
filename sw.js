@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v7-rolls';
+const CACHE = 'agrima-v7-rolls-ui-settings';
 
 const PRECACHE = [
   './',

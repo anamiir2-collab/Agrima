@@ -29,6 +29,12 @@
       "short_name": "أذون الصرف",
       "url": "./index.html#issuedocs",
       "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "حجوزات العملاء — تتبع طلبات البكر",
+      "short_name": "حجوزات العملاء",
+      "url": "./index.html#reservations",
+      "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }

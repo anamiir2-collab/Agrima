@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Agrima — إدارة المخزون والرولات والبكر</title>
-  <meta name="description" content="Agrima: إدارة المخزون والرولات والبكر والإنتاج وأذون الصرف — رصيد، تسجيل بكر، أذون ضريبية وغير ضريبية، تقارير طباعة A4، ونسخ احتياطي — يعمل بدون إنترنت">
+  <title>Agrima — إدارة المخزون والرولات والبكر وحجوزات العملاء</title>
+  <meta name="description" content="Agrima: إدارة المخزون والرولات والبكر والإنتاج وأذون الصرف وحجوزات العملاء — رصيد، تسجيل بكر، أذون ضريبية وغير ضريبية، تتبع حجوزات العملاء، تقارير طباعة A4، ونسخ احتياطي — يعمل بدون إنترنت">
   <meta name="theme-color" content="#134E4A">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="assets/icons/favicon-64.png" type="image/png">
@@ -12,8 +12,8 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="css/style.css?v=v7-agrima-rolls">
-  <link rel="stylesheet" href="css/print.css?v=v7-agrima-rolls" media="print">
+  <link rel="stylesheet" href="css/style.css?v=v8-reservations-r3">
+  <link rel="stylesheet" href="css/print.css?v=v8-reservations-r3" media="print">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -34,6 +34,7 @@
         <a class="nav-item" data-route="rolls" href="#rolls"><span class="nav-ic">🔄</span><span class="nav-txt" data-i18n="rolls">إدارة الرولات والبكر</span></a>
         <a class="nav-item" data-route="production" href="#production"><span class="nav-ic">🏭</span><span class="nav-txt" data-i18n="production">سجل الإنتاج</span></a>
         <a class="nav-item" data-route="issuedocs" href="#issuedocs"><span class="nav-ic">🧾</span><span class="nav-txt" data-i18n="issuedocs">أذون الصرف</span></a>
+        <a class="nav-item" data-route="reservations" href="#reservations"><span class="nav-ic">📋</span><span class="nav-txt" data-i18n="reservations">حجوزات العملاء</span></a>
         <a class="nav-item" data-route="outlog" href="#outlog"><span class="nav-ic">📤</span><span class="nav-txt" data-i18n="outlog">سجل حركات الصرف</span></a>
         <a class="nav-item" data-route="customers" href="#customers"><span class="nav-ic">👥</span><span class="nav-txt" data-i18n="customers">العملاء</span></a>
         <a class="nav-item" data-route="products" href="#products"><span class="nav-ic">🏷</span><span class="nav-txt" data-i18n="products">إدارة الأصناف</span></a>
@@ -44,7 +45,7 @@
       </nav>
       <div class="side-foot">
         <div id="net-status" class="net-status"></div>
-        <div class="muted small">Agrima v7 — تسجيل البكر هو مصدر الإنتاج — يعمل محليًا</div>
+        <div class="muted small">Agrima v8 — حجوزات العملاء — يعمل محليًا</div>
       </div>
     </aside>
     <div class="nav-backdrop" id="nav-backdrop"></div>
@@ -89,16 +90,17 @@
   <script src="vendor/chart.umd.min.js"></script>
 
   <!-- application modules (order matters) -->
-  <script src="js/calculations.js?v=v7-agrima-rolls"></script>
-  <script src="js/database.js?v=v7-agrima-rolls"></script>
-  <script src="js/ui.js?v=v7-agrima-rolls"></script>
-  <script src="js/transactions.js?v=v7-agrima-rolls"></script>
-  <script src="js/excel.js?v=v7-warehouse-aggregate"></script>
-  <script src="js/app.js?v=v7-agrima-rolls"></script>
-  <script src="js/rolls.js?v=v7-agrima-rolls"></script>
-  <script src="js/inventory.js?v=v7-warehouse-aggregate"></script>
-  <script src="js/issuedocs.js?v=v7-agrima-rolls"></script>
-  <script src="js/reports.js?v=v7-final-page-totals-signature"></script>
-  <script src="js/backup.js?v=v7-agrima-rolls"></script>
+  <script src="js/calculations.js?v=v8-reservations-r3"></script>
+  <script src="js/database.js?v=v8-reservations-r3"></script>
+  <script src="js/ui.js?v=v8-reservations-r3"></script>
+  <script src="js/transactions.js?v=v8-reservations-r3"></script>
+  <script src="js/excel.js?v=v8-reservations-r3"></script>
+  <script src="js/app.js?v=v8-reservations-r3"></script>
+  <script src="js/rolls.js?v=v8-reservations-r3"></script>
+  <script src="js/inventory.js?v=v8-reservations-r3"></script>
+  <script src="js/issuedocs.js?v=v8-reservations-r3"></script>
+  <script src="js/reservations.js?v=v8-reservations-r3"></script>
+  <script src="js/reports.js?v=v8-reservations-r3"></script>
+  <script src="js/backup.js?v=v8-reservations-r3"></script>
 </body>
 </html>

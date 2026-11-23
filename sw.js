@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v7-final-page-totals-signature';
+const CACHE = 'agrima-v8-reservations-r3';
 
 const PRECACHE = [
   './',
@@ -23,6 +23,7 @@ const PRECACHE = [
   './js/rolls.js',
   './js/inventory.js',
   './js/issuedocs.js',
+  './js/reservations.js',
   './js/reports.js',
   './js/backup.js',
   './vendor/xlsx.full.min.js',

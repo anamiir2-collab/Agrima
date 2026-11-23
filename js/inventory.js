@@ -15,193 +15,150 @@
 
   /* ================= Inventory view ================= */
   async function renderInventory(host) {
-    /* The warehouse report is the source of truth for which product/GSM/size
-       combinations currently exist in stock. Keep the inventory's detailed
-       roll-weight rows, but only for combinations with a positive warehouse
-       report balance. This intentionally matches reports.js → "warehouse". */
-    const warehouseBalances = global.CALC.computeBalances(App.state.transactions);
-    const warehouseSizeKeys = new Set([...warehouseBalances.values()]
-      .filter((b) => Number(b.net) > 0)
-      .map((b) => global.CALC.comboKey(b.quality, b.gsm, b.size)));
-
-    /* Optional stricter filter: show only detailed buckets with an available reel. */
     const reels = await global.DB.getAll('reels');
-    const availableBucketKeys = new Set(reels
-      .filter((r) => r.status === 'available')
-      .map((r) => global.CALC.comboKeyW(r.quality, r.gram, r.weight, r.size)));
+    /* Match the warehouse report exactly: one row per product + GSM + size.
+       Roll weights are deliberately NOT a grouping dimension here. */
+    const reportBalances = global.CALC.computeBalances(App.state.transactions);
+    const rowsBase = [...reportBalances.values()]
+      .filter((b) => Number(b.net) > 0)
+      .map((b) => ({
+        quality: b.quality, family: familyOf(b.quality), gsm: b.gsm, size: b.size,
+        add: b.add, out: b.out, net: b.net,
+        estWeight: global.CALC.productWeight(b.size, b.net, App.state.settings.weightFactor),
+        key: global.CALC.comboKey(b.quality, b.gsm, b.size),
+      }))
+      .sort((a, b) => {
+        const ia = CANON.indexOf(a.family), ib = CANON.indexOf(b.family);
+        const oa = ia < 0 ? CANON.length : ia, ob = ib < 0 ? CANON.length : ib;
+        return oa - ob || a.family.localeCompare(b.family, 'ar') ||
+          Number(a.gsm) - Number(b.gsm) || Number(a.size) - Number(b.size);
+      });
+    const families = CANON.filter((f) => rowsBase.some((b) => b.family === f));
 
-    const buckets = [...App.state.balancesW.values()].filter((b) =>
-      Number(b.net) > 0 &&
-      warehouseSizeKeys.has(global.CALC.comboKey(b.quality, b.gsm, b.size)));
-    const families = CANON.filter((f) => buckets.some((b) => familyOf(b.quality) === f));
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('inventory'))}</h2>
-        <div class="head-actions">
-          <button class="btn btn-ghost" id="inv-export">${t('exportExcel')}</button>
-        </div></div>
+        <div class="head-actions"><button class="btn btn-ghost" id="inv-export">${t('exportExcel')}</button></div></div>
       <div class="card filters">
         <input type="text" id="inv-search" placeholder="${lang() ? 'بحث باسم الصنف…' : 'Search product…'}">
-        <select id="inv-family"><option value="">${lang() ? 'الصنف: الكل' : 'Product: all'}</option>
+        <select id="inv-family"><option value=""> ${lang() ? 'الصنف: الكل' : 'Product: all'}</option>
           ${families.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join('')}</select>
-        <select id="inv-gsm"><option value="">${t('gsm')}: ${t('all')}</option></select>
-        <select id="inv-weight"><option value="">${t('rollWeight')}: ${t('all')}</option></select>
-        <select id="inv-size"><option value="">${t('size')}: ${t('all')}</option></select>
+        <select id="inv-gsm"><option value=""> ${t('gsm')}: ${t('all')}</option></select>
+        <select id="inv-size"><option value=""> ${t('size')}: ${t('all')}</option></select>
         <label class="chk"><input type="checkbox" id="inv-available-only"> ${lang() ? 'البكر المتاحة في المخزن فقط' : 'Available reels in stock only'}</label>
         <select id="inv-sort">
           <option value="name">${lang() ? 'ترتيب: الصنف' : 'Sort: name'}</option>
           <option value="bal-desc">${lang() ? 'الرصيد (تنازلي)' : 'balance (high→low)'}</option>
           <option value="bal-asc">${lang() ? 'الرصيد (تصاعدي)' : 'balance (low→high)'}</option>
-          <option value="weight-desc">${lang() ? 'الوزن التقديري (تنازلي)' : 'estimated weight (high→low)'}</option>
+          <option value="weight-desc">${lang() ? 'الوزن التقريبي (تنازلي)' : 'estimated weight (high→low)'}</option>
         </select>
         <button class="btn btn-ghost" id="inv-clear">${t('reset')}</button>
       </div>
       <div class="card table-wrap" id="inv-table"></div>`;
 
-    /* Filter options come from the same report-qualified inventory rows. */
-    const gsms = [...new Set(buckets.map((b) => String(b.gsm)))].filter((x) => x !== '').sort((a, b) => Number(a) - Number(b));
-    const sizes = [...new Set(buckets.map((b) => String(b.size)))].filter((x) => x !== '').sort((a, b) => Number(a) - Number(b));
-    const weights = [...new Set(buckets.map((b) => (b.weight == null ? '—' : String(Number(b.weight)))))].sort((a, b) =>
-      (a === '—' ? 1 : b === '—' ? -1 : Number(a) - Number(b)));
-    host.querySelector('#inv-gsm').innerHTML += gsms.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
-    host.querySelector('#inv-weight').innerHTML += weights.map((w) => `<option value="${esc(w)}">${esc(w)}</option>`).join('');
-    host.querySelector('#inv-size').innerHTML += sizes.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    const gsms = [...new Set(rowsBase.map((b) => String(b.gsm)))].sort((a, b) => Number(a) - Number(b));
+    const sizes = [...new Set(rowsBase.map((b) => String(b.size)))].sort((a, b) => Number(a) - Number(b));
+    host.querySelector('#inv-gsm').innerHTML += gsms.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    host.querySelector('#inv-size').innerHTML += sizes.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+
+    function matchingReels(row) {
+      return reels.filter((r) =>
+        global.CALC.comboKey(r.quality, r.gram, r.size) === row.key &&
+        r.status === 'available'
+      ).sort((a, b) => Number(a.rollNo) - Number(b.rollNo) || Number(a.reelNo) - Number(b.reelNo));
+    }
 
     function draw() {
       const q = host.querySelector('#inv-search').value.trim().toLowerCase();
       const fam = host.querySelector('#inv-family').value;
-      const g = host.querySelector('#inv-gsm').value;
-      const w = host.querySelector('#inv-weight').value;
-      const s = host.querySelector('#inv-size').value;
+      const gsm = host.querySelector('#inv-gsm').value;
+      const size = host.querySelector('#inv-size').value;
       const sort = host.querySelector('#inv-sort').value;
       const availableOnly = host.querySelector('#inv-available-only').checked;
-      const wf = App.state.settings.weightFactor;
-
-      let rows = buckets.map((b) => Object.assign({}, b, {
-        family: familyOf(b.quality),
-        estWeight: global.CALC.productWeight(b.size, b.net, wf),
-        weightLabel: b.weight == null ? '—' : fmtNum(b.weight),
+      let rows = rowsBase.map((r) => Object.assign({}, r, {
+        estWeight: global.CALC.productWeight(r.size, r.net, App.state.settings.weightFactor),
+        availableReels: matchingReels(r),
       }));
       if (q) rows = rows.filter((r) => r.quality.toLowerCase().includes(q) || r.family.toLowerCase().includes(q));
       if (fam) rows = rows.filter((r) => r.family === fam);
-      if (g) rows = rows.filter((r) => String(r.gsm) === g);
-      if (w) rows = rows.filter((r) => r.weightLabel === w);
-      if (s) rows = rows.filter((r) => String(r.size) === s);
-      rows = rows.filter((r) => Number(r.net) > 0); /* hide zero and negative balances */
-      if (availableOnly) rows = rows.filter((r) => availableBucketKeys.has(global.CALC.comboKeyWOf(r)));
-      const cmp = {
-        name: (a, b) => {
-          const ia = CANON.indexOf(a.family), ib = CANON.indexOf(b.family);
-          const oa = ia < 0 ? CANON.length : ia, ob = ib < 0 ? CANON.length : ib;
-          return oa - ob || a.family.localeCompare(b.family, 'ar') || Number(a.gsm) - Number(b.gsm) ||
-            (a.weight == null ? -1 : b.weight == null ? 1 : a.weight - b.weight) || Number(a.size) - Number(b.size);
-        },
-        'bal-desc': (a, b) => b.net - a.net,
-        'bal-asc': (a, b) => a.net - b.net,
-        'weight-desc': (a, b) => b.estWeight - a.estWeight,
-      }[sort] || ((a, b) => 0);
-      rows.sort(cmp);
+      if (gsm) rows = rows.filter((r) => String(r.gsm) === gsm);
+      if (size) rows = rows.filter((r) => String(r.size) === size);
+      if (availableOnly) rows = rows.filter((r) => r.availableReels.length > 0);
+      if (sort === 'bal-desc') rows.sort((a, b) => b.net - a.net);
+      else if (sort === 'bal-asc') rows.sort((a, b) => a.net - b.net);
+      else if (sort === 'weight-desc') rows.sort((a, b) => b.estWeight - a.estWeight);
 
-      const totNet = rows.reduce((s2, r) => s2 + r.net, 0);
-      const totW = global.CALC.round6(rows.reduce((s2, r) => s2 + r.estWeight, 0));
-
+      const totalQty = global.CALC.round6(rows.reduce((sum, r) => sum + r.net, 0));
+      const totalWeight = global.CALC.round6(rows.reduce((sum, r) => sum + r.estWeight, 0));
       host.querySelector('#inv-table').innerHTML = `
         <table class="data-table sticky-head">
           <thead><tr>
-            <th>${t('quality')}</th><th>${t('gsm')}</th><th>${t('rollWeight')}</th><th>${t('size')}</th>
+            <th>${t('quality')}</th><th>${t('gsm')}</th><th>${t('size')}</th>
             <th class="num">${t('addQty')}</th><th class="num">${t('outQty')}</th>
-            <th class="num">${t('balance')}</th><th class="num">${lang() ? 'الوزن التقديري' : 'Est. weight'} (${t('kg')})</th>
+            <th class="num">${t('balance')}</th><th class="num">${lang() ? 'الوزن التقريبي (كجم)' : 'Estimated weight (kg)'}</th>
             <th>${t('actions')}</th>
           </tr></thead>
-          <tbody>${rows.length ? rows.map(rowHtml).join('') : `<tr><td colspan="9" class="empty">${lang() ? 'لا توجد أصناف برصيد مطابقة للبحث' : 'no items match'}</td></tr>`}</tbody>
+          <tbody>${rows.length ? rows.map((r) => `
+            <tr>
+              <td data-label="${t('quality')}">${esc(r.family)}</td>
+              <td data-label="${t('gsm')}">${fmtNum(r.gsm)}</td>
+              <td data-label="${t('size')}">${fmtNum(r.size)}</td>
+              <td class="num pos" data-label="${t('addQty')}">${fmtNum(r.add)}</td>
+              <td class="num neg" data-label="${t('outQty')}">${fmtNum(r.out)}</td>
+              <td data-label="${t('balance')}"><span class="badge bal-pos">${fmtNum(r.net)}</span></td>
+              <td class="num" data-label="${lang() ? 'الوزن التقريبي' : 'Estimated weight'}">${fmtNum(r.estWeight, 2)}</td>
+              <td><button class="link-btn" data-view="${esc(r.key)}">${t('details')}</button></td>
+            </tr>`).join('') : `<tr><td colspan="8" class="empty">${lang() ? 'لا توجد أصناف برصيد مطابقة للبحث' : 'no items match'}</td></tr>`}</tbody>
           <tfoot><tr>
-            <td colspan="6">${t('total')} (${fmtNum(rows.length)} ${lang() ? 'صنف' : 'items'})</td>
-            <td class="num">${fmtNum(totNet)}</td><td class="num">${fmtNum(totW, 2)}</td>
-            <td></td>
+            <td colspan="5">${t('total')} (${fmtNum(rows.length)} ${lang() ? 'مقاس' : 'sizes'})</td>
+            <td class="num">${fmtNum(totalQty)}</td><td class="num">${fmtNum(totalWeight, 2)}</td><td></td>
           </tr></tfoot>
         </table>`;
-
-      host.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => openDetails(b.dataset.bucket)));
+      host.querySelectorAll('[data-view]').forEach((btn) =>
+        btn.addEventListener('click', () => openDetails(btn.dataset.view)));
     }
 
-    function rowHtml(p) {
-      const negative = p.net < 0;
-      const cls = negative ? 'bal-neg' : p.net === 0 ? 'bal-zero' : 'bal-pos';
-      return `<tr class="${negative ? 'tr-neg' : ''}">
-        <td data-label="${t('quality')}">${esc(p.family)}</td>
-        <td data-label="${t('gsm')}">${fmtNum(p.gsm)}</td>
-        <td data-label="${t('rollWeight')}">${esc(p.weightLabel)}</td>
-        <td data-label="${t('size')}">${fmtNum(p.size)}</td>
-        <td class="num pos" data-label="${t('addQty')}">${p.add ? fmtNum(p.add) : ''}</td>
-        <td class="num neg" data-label="${t('outQty')}">${p.out ? fmtNum(p.out) : ''}</td>
-        <td data-label="${t('balance')}"><span class="badge ${cls}">${fmtNum(p.net)}</span></td>
-        <td class="num" data-label="${lang() ? 'الوزن التقديري' : 'Est. weight'}">${fmtNum(p.estWeight, 2)}</td>
-        <td><button class="link-btn" data-view="${esc(global.CALC.comboKeyWOf(p))}">${t('details')}</button></td></tr>`;
-    }
-
-    /* ---- bucket details + full history with running balance ---- */
-    function openDetails(bucketKey) {
-      const b0 = App.state.balancesW.get(bucketKey);
-      if (!b0) return;
-      const txs = App.state.transactions
-        .filter((r) => global.CALC.comboKeyWOf(r) === bucketKey)
-        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.id || 0) - (b.id || 0)));
-      let run = 0;
-      const MAX_RENDER = 1000;
-      const rowsHtml = txs.map((r) => {
-        run += (Number(r.addQty) || 0) - (Number(r.outQty) || 0);
-        return { r, run: global.CALC.round6(run) };
-      });
-      const hidden = Math.max(0, rowsHtml.length - MAX_RENDER);
-      const shown = hidden ? rowsHtml.slice(-MAX_RENDER) : rowsHtml;
-      const rowsStr = shown.map(({ r, run: runv }) => `<tr>
-          <td>${global.UI.fmtDate(r.date)}</td><td>${esc(App.canonicalCustomer(r.customer) || '')}</td>
-          <td>${esc(r.permitNo || '')}</td>
-          <td class="num pos">${r.addQty ? fmtNum(r.addQty) : ''}</td>
-          <td class="num neg">${r.outQty ? fmtNum(r.outQty) : ''}</td>
-          <td class="num"><strong>${fmtNum(runv)}</strong></td>
-          <td>${esc(r.settlement || '')}</td></tr>`).join('');
-      const note = hidden ? `<div class="muted small" style="padding:.4rem .6rem">${lang()
-        ? `يُعرض آخر ${MAX_RENDER} حركة من إجمالي ${fmtNum(txs.length)} — افتح تقرير حركة الصنف لعرضها كلها للطباعة`
-        : `Showing latest ${MAX_RENDER} of ${txs.length} rows — use the product movement report for the full printable list`}</div>` : '';
-      const net = b0.net;
+    function openDetails(key) {
+      const row = rowsBase.find((r) => r.key === key);
+      if (!row) return;
+      const list = matchingReels(row);
+      const codesHtml = list.length ? list.map((r) => `
+        <tr><td>${fmtNum(r.rollNo)}</td><td>${fmtNum(r.reelNo)}</td>
+          <td>${r.size == null ? '—' : fmtNum(r.size)}</td>
+          <td>${r.weight == null ? '—' : fmtNum(r.weight, 3)}</td>
+          <td>${r.status === 'available' ? (lang() ? 'متاحة' : 'Available') : esc(r.status || '—')}</td></tr>`).join('')
+        : `<tr><td colspan="5" class="empty">${lang() ? 'لا توجد أكواد بكر مسجلة كمتاحة لهذا المقاس' : 'No available reel codes recorded for this size'}</td></tr>`;
       const node = el(`<div>
-        <div class="details-head">
-          <div><h4>${esc(b0.quality)}</h4>
-          <p class="muted">${t('gsm')}: <strong>${fmtNum(b0.gsm)}</strong> — ${t('rollWeight')}: <strong>${b0.weight == null ? '—' : fmtNum(b0.weight)}</strong> — ${t('size')}: <strong>${fmtNum(b0.size)}</strong></p></div>
+        <div class="details-head"><div><h4>${esc(row.family)}</h4>
+          <p class="muted">${t('gsm')}: <strong>${fmtNum(row.gsm)}</strong> — ${t('size')}: <strong>${fmtNum(row.size)}</strong></p></div>
           <div class="details-balance">
-            <div class="stat-mini"><span>${t('balance')}</span><strong class="${net < 0 ? 'neg' : net === 0 ? '' : 'pos'}">${fmtNum(net)}</strong></div>
-            <div class="stat-mini"><span>${t('add')}</span><strong>${fmtNum(b0.add)}</strong></div>
-            <div class="stat-mini"><span>${t('out')}</span><strong>${fmtNum(b0.out)}</strong></div>
-            <div class="stat-mini"><span>${lang() ? 'الوزن التقديري' : 'Est. weight'}</span><strong>${fmtNum(global.CALC.productWeight(b0.size, net, App.state.settings.weightFactor), 2)} ${t('kg')}</strong></div>
+            <div class="stat-mini"><span>${t('balance')}</span><strong class="pos">${fmtNum(row.net)}</strong></div>
+            <div class="stat-mini"><span>${lang() ? 'الوزن التقريبي' : 'Estimated weight'}</span><strong>${fmtNum(row.estWeight, 2)} ${t('kg')}</strong></div>
+            <div class="stat-mini"><span>${lang() ? 'عدد الأكواد المسجلة' : 'Recorded reel codes'}</span><strong>${fmtNum(list.length)}</strong></div>
           </div></div>
+        <h4>${lang() ? 'أكواد البكر الموجودة بالمخزن' : 'Available reel codes'}</h4>
         <div class="table-wrap scroll-tall"><table class="data-table">
-          <thead><tr><th>${t('date')}</th><th>${t('customer')}</th><th>${t('permit')}</th>
-            <th class="num">${t('addQty')}</th><th class="num">${t('outQty')}</th>
-            <th class="num">${lang() ? 'الرصيد الجاري' : 'Running balance'}</th><th>${t('settlement')}</th></tr></thead>
-          <tbody>${rowsStr || `<tr><td colspan="7" class="empty">${lang() ? 'لا توجد حركات لهذا الصنف' : 'no transactions'}</td></tr>`}</tbody>
-        </table></div>${note}</div>`);
-      openModal(node, { title: lang() ? 'تفاصيل الصنف وسجل حركاته الكاملة' : 'Item details & full history', wide: true });
+          <thead><tr><th>${lang() ? 'كود الرول' : 'Roll code'}</th><th>${lang() ? 'كود البكرة' : 'Reel code'}</th>
+            <th>${t('size')}</th><th>${lang() ? 'وزن البكرة (كجم)' : 'Reel weight (kg)'}</th><th>${lang() ? 'الحالة' : 'Status'}</th></tr></thead>
+          <tbody>${codesHtml}</tbody></table></div>
+      </div>`);
+      openModal(node, { title: lang() ? 'تفاصيل المقاس وأكواد البكر' : 'Size details & reel codes', wide: true });
     }
 
     host.querySelector('#inv-search').addEventListener('input', draw);
-    host.querySelector('#inv-family').addEventListener('change', draw);
-    host.querySelector('#inv-gsm').addEventListener('change', draw);
-    host.querySelector('#inv-weight').addEventListener('change', draw);
-    host.querySelector('#inv-size').addEventListener('change', draw);
-    host.querySelector('#inv-sort').addEventListener('change', draw);
-    host.querySelector('#inv-available-only').addEventListener('change', draw);
+    ['#inv-family','#inv-gsm','#inv-size','#inv-sort','#inv-available-only'].forEach((selector) =>
+      host.querySelector(selector).addEventListener('change', draw));
     host.querySelector('#inv-clear').addEventListener('click', () => {
-      host.querySelector('#inv-search').value = '';
-      host.querySelector('#inv-family').value = '';
-      host.querySelector('#inv-gsm').value = '';
-      host.querySelector('#inv-weight').value = '';
-      host.querySelector('#inv-size').value = '';
+      ['#inv-search','#inv-family','#inv-gsm','#inv-size'].forEach((selector) => { host.querySelector(selector).value = ''; });
       host.querySelector('#inv-available-only').checked = false;
+      host.querySelector('#inv-sort').value = 'name';
       draw();
     });
     host.querySelector('#inv-export').addEventListener('click', () => {
-      const bucketsOut = buckets;
-      global.EXCEL.exportInventoryBuckets(bucketsOut, App.state.settings.weightFactor);
+      const exportRows = rowsBase.map((r) => ({
+        quality: r.quality, gsm: r.gsm, size: r.size, add: r.add, out: r.out, net: r.net,
+        weight: null, estWeight: global.CALC.productWeight(r.size, r.net, App.state.settings.weightFactor),
+      }));
+      global.EXCEL.exportInventoryBuckets(exportRows, App.state.settings.weightFactor);
       toast(lang() ? 'تم تنزيل ملف رصيد المخزن' : 'inventory Excel downloaded', 'ok');
     });
     draw();

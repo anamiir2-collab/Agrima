@@ -15,12 +15,25 @@
 
   /* ================= Inventory view ================= */
   async function renderInventory(host) {
-    /* Reel records carry the authoritative physical availability status. */
+    /* The warehouse report is the source of truth for which product/GSM/size
+       combinations currently exist in stock. Keep the inventory's detailed
+       roll-weight rows, but only for combinations with a positive warehouse
+       report balance. This intentionally matches reports.js → "warehouse". */
+    const warehouseBalances = global.CALC.computeBalances(App.state.transactions);
+    const warehouseSizeKeys = new Set([...warehouseBalances.values()]
+      .filter((b) => Number(b.net) > 0)
+      .map((b) => global.CALC.comboKey(b.quality, b.gsm, b.size)));
+
+    /* Optional stricter filter: show only detailed buckets with an available reel. */
     const reels = await global.DB.getAll('reels');
     const availableBucketKeys = new Set(reels
       .filter((r) => r.status === 'available')
       .map((r) => global.CALC.comboKeyW(r.quality, r.gram, r.weight, r.size)));
-    const families = CANON.filter((f) => App.state.balancesW && [...App.state.balancesW.values()].some((b) => familyOf(b.quality) === f));
+
+    const buckets = [...App.state.balancesW.values()].filter((b) =>
+      Number(b.net) > 0 &&
+      warehouseSizeKeys.has(global.CALC.comboKey(b.quality, b.gsm, b.size)));
+    const families = CANON.filter((f) => buckets.some((b) => familyOf(b.quality) === f));
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('inventory'))}</h2>
         <div class="head-actions">
@@ -44,8 +57,7 @@
       </div>
       <div class="card table-wrap" id="inv-table"></div>`;
 
-    /* filter options from the weight-dimension buckets */
-    const buckets = [...App.state.balancesW.values()].filter((b) => Number(b.net) > 0);
+    /* Filter options come from the same report-qualified inventory rows. */
     const gsms = [...new Set(buckets.map((b) => String(b.gsm)))].filter((x) => x !== '').sort((a, b) => Number(a) - Number(b));
     const sizes = [...new Set(buckets.map((b) => String(b.size)))].filter((x) => x !== '').sort((a, b) => Number(a) - Number(b));
     const weights = [...new Set(buckets.map((b) => (b.weight == null ? '—' : String(Number(b.weight)))))].sort((a, b) =>
@@ -188,7 +200,7 @@
       draw();
     });
     host.querySelector('#inv-export').addEventListener('click', () => {
-      const bucketsOut = [...App.state.balancesW.values()].filter((b) => Number(b.net) > 0);
+      const bucketsOut = buckets;
       global.EXCEL.exportInventoryBuckets(bucketsOut, App.state.settings.weightFactor);
       toast(lang() ? 'تم تنزيل ملف رصيد المخزن' : 'inventory Excel downloaded', 'ok');
     });

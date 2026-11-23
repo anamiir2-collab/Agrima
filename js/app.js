@@ -1455,13 +1455,6 @@
     await global.DB.open(); /* typed errors: blocked / timeout / unavailable */
 
     setLoadingStatus(UI.getLang() === 'ar' ? 'تحميل الأصناف والحركات…' : 'Loading products & movements…');
-    const langBtn = document.getElementById('lang-switch');
-    if (langBtn) langBtn.addEventListener('click', async () => {
-      const nl = UI.getLang() === 'ar' ? 'en' : 'ar';
-      UI.setLang(nl);
-      await global.DB.setSetting('lang', nl);
-      navigate(currentRoute);
-    });
     document.querySelectorAll('.nav-item').forEach((n) => {
       n.addEventListener('click', (e) => { e.preventDefault(); navigate(n.dataset.route); });
     });

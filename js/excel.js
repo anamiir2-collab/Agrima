@@ -544,22 +544,22 @@
     XLSX.writeFile(wb, stampFileName('رصيد_المخزن'), WRITE_OPTS);
   }
 
-  /* رصيد المخزن export — full hierarchy: Product → GSM → Roll Weight → Size */
+  /* رصيد المخزن export — one row per product + GSM + size, matching the warehouse report */
   function exportInventoryBuckets(buckets, weightFactor) {
     const wb = newWb();
-    const aoa = [['الصنف', 'الجرام (GSM)', 'وزن البكرة (كجم)', 'المقاس (Size)', 'الإضافات', 'الصرف', 'رصيد المخزن (بكر)', 'الوزن التقديري (كجم)']];
+    const aoa = [['الصنف', 'الجرام (GSM)', 'المقاس (Size)', 'الإضافات', 'الصرف', 'رصيد المخزن (بكر)', 'الوزن التقريبي (كجم)']];
     let totAdd = 0, totOut = 0, totNet = 0, totWeight = 0;
     const rows = buckets.slice().sort((a, b) =>
-      global.CALC.comboKeyWOf(a).localeCompare(global.CALC.comboKeyWOf(b)));
+      global.CALC.comboKey(a.quality, a.gsm, a.size).localeCompare(global.CALC.comboKey(b.quality, b.gsm, b.size)));
     for (const b of rows) {
       const w = global.CALC.productWeight(b.size, b.net, weightFactor);
       totAdd += b.add; totOut += b.out; totNet += b.net; totWeight += w;
-      aoa.push([b.quality, b.gsm, b.weight == null ? '' : b.weight, b.size, b.add, b.out, b.net, w]);
+      aoa.push([b.quality, b.gsm, b.size, b.add, b.out, b.net, w]);
     }
-    aoa.push(['الإجمالي', '', '', '', global.CALC.round6(totAdd), global.CALC.round6(totOut),
+    aoa.push(['الإجمالي', '', '', global.CALC.round6(totAdd), global.CALC.round6(totOut),
       global.CALC.round6(totNet), global.CALC.round6(totWeight)]);
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 26 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 18 }];
+    ws['!cols'] = [{ wch: 26 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 18 }];
     ws['!views'] = [{ RTL: true }];
     XLSX.utils.book_append_sheet(wb, ws, 'رصيد المخزن');
     XLSX.writeFile(wb, stampFileName('رصيد_المخزن'), WRITE_OPTS);

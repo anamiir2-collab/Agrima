@@ -39,7 +39,7 @@
       <div class="card table-wrap" id="inv-table"></div>`;
 
     /* filter options from the weight-dimension buckets */
-    const buckets = [...App.state.balancesW.values()];
+    const buckets = [...App.state.balancesW.values()].filter((b) => Number(b.net) > 0);
     const gsms = [...new Set(buckets.map((b) => String(b.gsm)))].filter((x) => x !== '').sort((a, b) => Number(a) - Number(b));
     const sizes = [...new Set(buckets.map((b) => String(b.size)))].filter((x) => x !== '').sort((a, b) => Number(a) - Number(b));
     const weights = [...new Set(buckets.map((b) => (b.weight == null ? '—' : String(Number(b.weight)))))].sort((a, b) =>
@@ -67,7 +67,7 @@
       if (g) rows = rows.filter((r) => String(r.gsm) === g);
       if (w) rows = rows.filter((r) => r.weightLabel === w);
       if (s) rows = rows.filter((r) => String(r.size) === s);
-      rows = rows.filter((r) => r.net !== 0); /* zero-balance items stay hidden */
+      rows = rows.filter((r) => Number(r.net) > 0); /* show only stock physically remaining; hide zero and negative balances */
       const cmp = {
         name: (a, b) => {
           const ia = CANON.indexOf(a.family), ib = CANON.indexOf(b.family);
@@ -178,7 +178,7 @@
       draw();
     });
     host.querySelector('#inv-export').addEventListener('click', () => {
-      const bucketsOut = [...App.state.balancesW.values()];
+      const bucketsOut = [...App.state.balancesW.values()].filter((b) => Number(b.net) > 0);
       global.EXCEL.exportInventoryBuckets(bucketsOut, App.state.settings.weightFactor);
       toast(lang() ? 'تم تنزيل ملف رصيد المخزن' : 'inventory Excel downloaded', 'ok');
     });

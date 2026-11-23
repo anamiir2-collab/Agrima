@@ -205,6 +205,35 @@
     });
 
     /* ---------- JSON backup / restore ---------- */
+    /* v8: حجوزات العملاء — مفاتيح LocalStorage مستقلة تمامًا عن بيانات
+       المخزون والإنتاج وأذون الصرف (IndexedDB). التصدير يضيفها ككائن
+       إضافي، والاستعادة تكتبها فقط إن وُجدت في الملف — لا تلمس أي مفتاح
+       قائم ولا تعتمد عليها أي عملية مخزنية. */
+    const RESV_LS_KEYS = [
+      'agrima_customer_reservations',
+      'agrima_reservation_transfers',
+      'agrima_reservation_cancellations',
+      'agrima_reservation_delivery_links',
+      'agrima_reservation_audit_log',
+    ];
+    function collectReservationData() {
+      const out = {};
+      for (const k of RESV_LS_KEYS) {
+        try {
+          const raw = global.localStorage.getItem(k);
+          if (raw != null) out[k] = JSON.parse(raw);
+        } catch (e) { /* تخطي المفتاح التالف بأمان — بقية البيانات سليمة */ }
+      }
+      return out;
+    }
+    function restoreReservationData(resv) {
+      if (!resv || typeof resv !== 'object') return;
+      for (const k of RESV_LS_KEYS) {
+        if (resv[k] === undefined) continue;
+        try { global.localStorage.setItem(k, JSON.stringify(resv[k])); } catch (e2) { /* تجاهل بأمان */ }
+      }
+    }
+
     async function downloadBackup() {
       const [products, transactions, settings, audit, rolls, reels, permits, customers, importlog] = await Promise.all([
         global.DB.getAll('products'), global.DB.getAll('transactions'),
@@ -214,9 +243,12 @@
         global.DB.getAll('importlog'),
       ]);
       const payload = {
-        app: 'inventory-pwa', schema: 2, exportedAt: new Date().toISOString(),
+        app: 'inventory-pwa', schema: 3, exportedAt: new Date().toISOString(),
         products, transactions, settings, audit: audit.slice(0, 200),
         rolls, reels, permits, customers, importlog,
+        /* v8: حجوزات العملاء — مفاتيح LocalStorage مستقلة تمامًا عن المخزون،
+           تصدير/استعادة إضافي لا يلمس أي مفتاح قائم */
+        reservationData: collectReservationData(),
       };
       const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
       const a = document.createElement('a');
@@ -256,6 +288,7 @@
         await global.DB.bulkPut('permits', data.permits || []);
         await global.DB.bulkPut('customers', data.customers || []);
         await global.DB.bulkPut('importlog', data.importlog || []);
+        if (data.reservationData) restoreReservationData(data.reservationData);
         for (const s of data.settings || []) await global.DB.put('settings', s);
         await global.DB.logAudit({
           entity: 'database', action: 'restore', entityId: null, before: null, after: null,

@@ -234,6 +234,9 @@
         reelsByRoll.get(r.rollNo).push(r);
       }
       rolls.sort((a, b) => b.rollNo - a.rollNo); /* newest first */
+      /* الحماية من سباق التنقل السريع: لو استُبدلت الشاشة أثناء التحميل
+         فلا شيء يُرسم (كان يطلق خطأ TypeError عند قراءة حقول اختفت) */
+      if (!host.querySelector('#rl-search')) return;
       draw();
     }
 

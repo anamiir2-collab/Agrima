@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v7-warehouse-aggregate';
+const CACHE = 'agrima-v7-warehouse-aggregate-2';
 
 const PRECACHE = [
   './',

@@ -688,3 +688,61 @@ body.modal-open { overflow: hidden; }
 
 /* تفاصيل الرول */
 .roll-details .details-balance { flex-wrap: wrap; }
+
+/* =========================================================================
+   حجوزات العملاء (reservations.js) — نفس لغة التصميم القائمة بلا نظام جديد
+   ألوان هادئة من اللوحة الأصلية، بلا زخارف زائدة — علامات حالة واضحة فقط.
+   ========================================================================= */
+.resv-notice { border-inline-start: 3px solid var(--secondary); background: var(--teal-50); }
+.resv-stats { margin-bottom: 1rem; }
+.resv-stats-sm .stat-card { padding: .7rem .8rem; }
+.resv-stats-sm .stat-num { font-size: 1.3rem; }
+.resv-stats-sm .stat-label { font-size: .72rem; }
+.stat-card.accent-red .stat-icon { background: var(--red-50); color: var(--danger); border-color: #F3C9C9; }
+
+/* شارات الحالة — شارة واحدة هادئة لكل حالة */
+.resv-chip {
+  display: inline-block; padding: .14rem .55rem; border-radius: 999px;
+  font-size: .74rem; font-weight: 700; white-space: nowrap;
+}
+.resv-st-available { background: var(--teal-50); color: var(--secondary); }
+.resv-st-awaiting { background: var(--amber-50); color: var(--warning); }
+.resv-st-received { background: var(--green-50); color: var(--primary); }
+.resv-st-loaded { background: var(--green-50); color: var(--success); }
+.resv-st-transferred { background: var(--gold-soft); color: var(--gold); }
+.resv-st-cancelled { background: var(--red-50); color: var(--danger); }
+.resv-st-open { background: var(--teal-50); color: var(--secondary); }
+
+/* صفوف بنود نموذج الحجز */
+.resv-item-row {
+  display: grid; gap: .55rem 1rem; grid-template-columns: 1fr; align-items: end;
+  border: 1px solid var(--line); border-inline-start: 3px solid var(--secondary);
+  border-radius: var(--radius-sm); padding: .65rem; margin-bottom: .55rem; background: #FFFDF6;
+}
+.resv-item-row.resv-item-locked { border-inline-start-color: var(--warning); background: #FFFBF2; }
+.resv-item-actions { display: flex; gap: .4rem; align-items: center; justify-content: flex-end; }
+.resv-est-val, .resv-used-val { min-height: 1.2em; padding-top: .15rem; }
+.resv-form-totals { padding: .5rem .2rem 0; }
+@media (min-width: 900px) {
+  .resv-item-row { grid-template-columns: 1.4fr .8fr .8fr 1fr 1.3fr 1.1fr auto; }
+}
+
+/* شاشة التفاصيل — بطاقات معلومات هادئة */
+.resv-meta-grid { display: grid; gap: .7rem; grid-template-columns: repeat(2, 1fr); margin-bottom: 1rem; }
+@media (min-width: 760px) { .resv-meta-grid { grid-template-columns: repeat(4, 1fr); } }
+.resv-meta { padding: .6rem .8rem; }
+.resv-meta-val { font-weight: 700; color: var(--text); margin-top: .15rem; }
+.resv-notes { font-weight: 500; font-size: .88rem; }
+
+/* أسطر الإذن داخل حوار الربط */
+.resv-lines-box { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: .55rem; margin: .5rem 0; background: #FFFDF6; }
+.resv-line-selected { outline: 2px solid var(--gold); outline-offset: -2px; background: var(--gold-soft); }
+.resv-line-used { opacity: .55; }
+.resv-warn { background: var(--amber-50); border: 1px solid #F2DCB3; border-radius: var(--radius-sm); padding: .45rem .6rem; color: var(--warning); margin-bottom: .5rem; }
+.resv-warn-inline { color: var(--warning); }
+.resv-link-form .form-grid { margin-bottom: .4rem; }
+
+@media (max-width: 639.5px) {
+  .resv-item-row { grid-template-columns: 1fr 1fr; }
+  .resv-item-row .resv-est, .resv-item-row .resv-item-actions { grid-column: 1 / -1; }
+}

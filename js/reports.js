@@ -538,16 +538,16 @@
             <thead><tr>${meta.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
             <tbody>${rows.length ? rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')
               : `<tr><td colspan="${meta.headers.length}" class="empty">${lang() ? 'لا توجد بيانات' : 'No data'}</td></tr>`}</tbody>
-            ${meta.totalsRow ? `<tfoot><tr>${meta.totalsRow.map((c) => `<td>${esc(c)}</td>`).join('')}</tr></tfoot>` : ''}
+            ${meta.totalsRow && pageNo === total ? `<tfoot><tr>${meta.totalsRow.map((c) => `<td>${esc(c)}</td>`).join('')}</tr></tfoot>` : ''}
           </table>
         </div>
-        <div class="rp-foot">
+        ${pageNo === total ? `<div class="rp-foot">
           <div class="sig-row">
             <div class="sig"><span>${lang() ? 'أمين المخزن' : 'Storekeeper'}</span><i></i></div>
             <div class="sig"><span>${lang() ? 'المحاسب' : 'Accountant'}</span><i></i></div>
             <div class="sig"><span>${lang() ? 'مدير المخزن' : 'Warehouse manager'}</span><i></i></div>
           </div>
-        </div>
+        </div>` : ''}
       </div>`);
     }
 

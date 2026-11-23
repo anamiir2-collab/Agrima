@@ -14,7 +14,12 @@
   const CANON = ['تست لينر معالج', 'توب لاينر'];
 
   /* ================= Inventory view ================= */
-  function renderInventory(host) {
+  async function renderInventory(host) {
+    /* Reel records carry the authoritative physical availability status. */
+    const reels = await global.DB.getAll('reels');
+    const availableBucketKeys = new Set(reels
+      .filter((r) => r.status === 'available')
+      .map((r) => global.CALC.comboKeyW(r.quality, r.gram, r.weight, r.size)));
     const families = CANON.filter((f) => App.state.balancesW && [...App.state.balancesW.values()].some((b) => familyOf(b.quality) === f));
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('inventory'))}</h2>
@@ -28,6 +33,7 @@
         <select id="inv-gsm"><option value="">${t('gsm')}: ${t('all')}</option></select>
         <select id="inv-weight"><option value="">${t('rollWeight')}: ${t('all')}</option></select>
         <select id="inv-size"><option value="">${t('size')}: ${t('all')}</option></select>
+        <label class="chk"><input type="checkbox" id="inv-available-only"> ${lang() ? 'البكر المتاحة في المخزن فقط' : 'Available reels in stock only'}</label>
         <select id="inv-sort">
           <option value="name">${lang() ? 'ترتيب: الصنف' : 'Sort: name'}</option>
           <option value="bal-desc">${lang() ? 'الرصيد (تنازلي)' : 'balance (high→low)'}</option>
@@ -55,6 +61,7 @@
       const w = host.querySelector('#inv-weight').value;
       const s = host.querySelector('#inv-size').value;
       const sort = host.querySelector('#inv-sort').value;
+      const availableOnly = host.querySelector('#inv-available-only').checked;
       const wf = App.state.settings.weightFactor;
 
       let rows = buckets.map((b) => Object.assign({}, b, {
@@ -67,7 +74,8 @@
       if (g) rows = rows.filter((r) => String(r.gsm) === g);
       if (w) rows = rows.filter((r) => r.weightLabel === w);
       if (s) rows = rows.filter((r) => String(r.size) === s);
-      rows = rows.filter((r) => Number(r.net) > 0); /* show only stock physically remaining; hide zero and negative balances */
+      rows = rows.filter((r) => Number(r.net) > 0); /* hide zero and negative balances */
+      if (availableOnly) rows = rows.filter((r) => availableBucketKeys.has(global.CALC.comboKeyWOf(r)));
       const cmp = {
         name: (a, b) => {
           const ia = CANON.indexOf(a.family), ib = CANON.indexOf(b.family);
@@ -169,12 +177,14 @@
     host.querySelector('#inv-weight').addEventListener('change', draw);
     host.querySelector('#inv-size').addEventListener('change', draw);
     host.querySelector('#inv-sort').addEventListener('change', draw);
+    host.querySelector('#inv-available-only').addEventListener('change', draw);
     host.querySelector('#inv-clear').addEventListener('click', () => {
       host.querySelector('#inv-search').value = '';
       host.querySelector('#inv-family').value = '';
       host.querySelector('#inv-gsm').value = '';
       host.querySelector('#inv-weight').value = '';
       host.querySelector('#inv-size').value = '';
+      host.querySelector('#inv-available-only').checked = false;
       draw();
     });
     host.querySelector('#inv-export').addEventListener('click', () => {

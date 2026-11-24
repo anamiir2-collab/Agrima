@@ -15,10 +15,15 @@
 
   /* ================= Inventory view ================= */
   async function renderInventory(host) {
+    const keeper = global.PERM && global.PERM.isWarehouse();
     const reels = await global.DB.getAll('reels');
     /* Match the warehouse report exactly: one row per product + GSM + size.
-       Roll weights are deliberately NOT a grouping dimension here. */
-    const reportBalances = global.CALC.computeBalances(App.state.transactions);
+       Roll weights are deliberately NOT a grouping dimension here.
+       أمين المخزن: الرصيد من اللقطة التجميعية المستلمة (لا حساب من الحركات
+       — جهازه لا يحمل كل التاريخ) */
+    const reportBalances = keeper
+      ? App.state.balances
+      : global.CALC.computeBalances(App.state.transactions);
     const rowsBase = [...reportBalances.values()]
       .filter((b) => Number(b.net) > 0)
       .map((b) => ({
@@ -37,7 +42,7 @@
 
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('inventory'))}</h2>
-        <div class="head-actions"><button class="btn btn-ghost" id="inv-export">${t('exportExcel')}</button></div></div>
+        <div class="head-actions">${keeper ? '' : `<button class="btn btn-ghost" id="inv-export">${t('exportExcel')}</button>`}</div></div>
       <div class="card filters">
         <input type="text" id="inv-search" placeholder="${lang() ? 'بحث باسم الصنف…' : 'Search product…'}">
         <select id="inv-family"><option value=""> ${lang() ? 'الصنف: الكل' : 'Product: all'}</option>
@@ -153,7 +158,8 @@
       host.querySelector('#inv-sort').value = 'name';
       draw();
     });
-    host.querySelector('#inv-export').addEventListener('click', () => {
+    const exportBtn = host.querySelector('#inv-export');
+    if (exportBtn) exportBtn.addEventListener('click', () => {
       const exportRows = rowsBase.map((r) => ({
         quality: r.quality, gsm: r.gsm, size: r.size, add: r.add, out: r.out, net: r.net,
         weight: null, estWeight: global.CALC.productWeight(r.size, r.net, App.state.settings.weightFactor),
@@ -220,6 +226,7 @@
         const ok = await confirmDialog({ title: lang() ? 'حذف صنف' : 'Delete product', message: msg, danger: true });
         if (!ok) return;
         await global.DB.del('products', p.id);
+        if (global.SYNC && p.sid) global.SYNC.recordTombstones('products', [p.sid]).catch(() => {});
         await global.DB.logAudit({ entity: 'product', action: 'delete', entityId: p.id, before: p, after: null });
         toast(lang() ? 'تم الحذف' : 'deleted', 'ok');
         await App.refresh();

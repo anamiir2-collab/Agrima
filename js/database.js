@@ -47,6 +47,19 @@
                     cancelReason, createdAt, updatedAt }
    Procurement changes are audited in the existing `audit` store with
    entity 'supplier' | 'purchase' | 'receive' | 'return'.
+
+   Stores added in v4 (Supabase sync layer — strictly additive too; the
+   v3→v4 upgrade only CREATES the two stores and the `sid` indexes below
+   and never reads, rewrites or deletes any existing record or store):
+     tombstones   { id '<store>|<sid>', store, sid, at } — deleted-record
+                    markers so a delete never resurrects from the cloud.
+     stockview    { key (combo), quality, gsm, size, add, out, net,
+                    updatedAt } — aggregated stock for the warehouse-keeper
+                    role (pulled via the RLS-safe app_stock_balances RPC).
+     index `sid`  on products / transactions / customers / rolls — the
+                    stable unique id used for duplicate-free sync. Existing
+                    rows simply have no sid until the sync layer assigns one
+                    lazily; the index stays empty and harmless until then.
    ========================================================================= */
 (function (global) {
   'use strict';
@@ -54,10 +67,11 @@
   const DB_NAME = 'inventory_pwa_db';
   /* v2: rolls / reels / permits / customers / importlog.
      v3: suppliers / purchases / receives / supreturns (procurement).
+     v4: tombstones / stockview + `sid` indexes (Supabase sync layer).
      The upgrade handler below ONLY creates object stores & indexes —
      existing stores, keys and records are never read, rewritten or deleted,
      so upgrading a live user database is purely additive (safe migration). */
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
 
   let _db = null;
   let _openPromise = null;
@@ -173,6 +187,23 @@
           s.createIndex('status', 'status', { unique: false });
           s.createIndex('date', 'date', { unique: false });
         }
+        /* ---- v4 stores (Supabase sync layer — additive only) ---- */
+        if (!db.objectStoreNames.contains('tombstones')) {
+          db.createObjectStore('tombstones', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('stockview')) {
+          db.createObjectStore('stockview', { keyPath: 'key' });
+        }
+        /* stable sync ids: the index stays empty until the sync layer
+           assigns sids lazily to legacy rows (never touches row data) */
+        ['products', 'transactions', 'customers', 'rolls'].forEach((name) => {
+          if (!db.objectStoreNames.contains(name)) return;
+          const st = e.target.transaction.objectStore(name);
+          const has = typeof st.indexNames.contains === 'function'
+            ? st.indexNames.contains('sid')
+            : Array.prototype.indexOf.call(st.indexNames, 'sid') >= 0;
+          if (!has) st.createIndex('sid', 'sid', { unique: false });
+        });
       };
       req.onsuccess = () => {
         _db = req.result;
@@ -277,7 +308,12 @@
 
     /* ---------- audit ---------- */
     logAudit(entry) {
-      return DB.add('audit', Object.assign({ at: new Date().toISOString() }, entry));
+      /* sid ثابت من لحظة الإنشاء — أساس دفع سجل التدقيق للسحابة دون تكرار */
+      let sid;
+      try { sid = crypto.randomUUID(); } catch (e2) {
+        sid = 'sid-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      }
+      return DB.add('audit', Object.assign({ at: new Date().toISOString(), sid }, entry));
     },
     getAudit(limit) {
       return DB.getAll('audit').then((rows) => {
@@ -288,33 +324,66 @@
 
     /* wipe everything (used only from explicit "reset" in settings and from
        restore, requires typed confirmation in the UI). Clears every store —
-       including the v3 procurement stores — and resets all sequences. */
+       including the v3 procurement stores and the v4 sync stores — and
+       resets all sequences. Wipes are LOCAL-only by design: the sync layer
+       records tombstones for every cloud-mapped row BEFORE clearing, so
+       nothing erased here can resurrect from Supabase. */
     wipeAll() {
-      return Promise.all([
-        DB.clear('products'), DB.clear('transactions'), DB.clear('audit'),
-        DB.clear('rolls'), DB.clear('reels'), DB.clear('permits'),
-        DB.clear('customers'), DB.clear('importlog'),
-        DB.clear('suppliers'), DB.clear('purchases'),
-        DB.clear('receives'), DB.clear('supreturns'),
-      ]).then(() => Promise.all([
-        DB.setSetting('lastImport', null),
-        DB.setSetting('docSeqTax', null),
-        DB.setSetting('docSeqNontax', null),
-        DB.setSetting('rollSeq', null),
-        DB.setSetting('supplierSeq', null),
-        DB.setSetting('purchaseSeq', null),
-        DB.setSetting('returnSeq', null),
-      ]));
+      return (async () => {
+        /* protect cloud consistency: tombstone every row that has a sid */
+        if (global.SYNC && global.SYNC.recordTombstones) {
+          const sidOf = (store) => global.DB.getAll(store).then((rows) =>
+            global.SYNC.recordTombstones(store, rows.filter((r) => r.sid).map((r) => r.sid)));
+          await Promise.all(['products', 'transactions', 'customers', 'rolls'].map(sidOf));
+          for (const store of ['reels', 'permits']) {
+            const rows = await global.DB.getAll(store);
+            await global.SYNC.recordTombstones(store, rows.map((r) => r.sid || r.id));
+          }
+        }
+        await Promise.all([
+          DB.clear('products'), DB.clear('transactions'), DB.clear('audit'),
+          DB.clear('rolls'), DB.clear('reels'), DB.clear('permits'),
+          DB.clear('customers'), DB.clear('importlog'),
+          DB.clear('suppliers'), DB.clear('purchases'),
+          DB.clear('receives'), DB.clear('supreturns'),
+          DB.clear('tombstones'), DB.clear('stockview'),
+        ]).then(() => Promise.all([
+          DB.setSetting('lastImport', null),
+          DB.setSetting('docSeqTax', null),
+          DB.setSetting('docSeqNontax', null),
+          DB.setSetting('rollSeq', null),
+          DB.setSetting('supplierSeq', null),
+          DB.setSetting('purchaseSeq', null),
+          DB.setSetting('returnSeq', null),
+          DB.setSetting('sync:lastSyncAt', null),
+          DB.setSetting('sync:pull:transactions', null),
+          DB.setSetting('sync:pull:products', null),
+          DB.setSetting('sync:pull:permits', null),
+          DB.setSetting('sync:pull:reels', null),
+          DB.setSetting('sync:pull:rolls', null),
+          DB.setSetting('sync:pull:customers', null),
+        ]));
+      })();
     },
 
     /* Replace ONLY the balance-file scope (products + transactions). Used by
        the Excel "import & replace" flow: roll/reel details, permits,
        customers and all procurement stores survive — the dialog announces
-       exactly this scope. Sequences self-heal from the new rows. */
+       exactly this scope. Sequences self-heal from the new rows.
+       Tombstones are recorded first so replaced rows never resurrect
+       from the cloud. */
     wipeBalanceScope() {
-      return Promise.all([
-        DB.clear('products'), DB.clear('transactions'),
-      ]);
+      return (async () => {
+        if (global.SYNC && global.SYNC.recordTombstones) {
+          const txRows = await global.DB.getAll('transactions');
+          await global.SYNC.recordTombstones('transactions', txRows.filter((r) => r.sid).map((r) => r.sid));
+          const prodRows = await global.DB.getAll('products');
+          await global.SYNC.recordTombstones('products', prodRows.filter((r) => r.sid).map((r) => r.sid));
+        }
+        await Promise.all([
+          DB.clear('products'), DB.clear('transactions'),
+        ]);
+      })();
     },
   };
 

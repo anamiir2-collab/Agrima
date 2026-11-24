@@ -140,7 +140,11 @@
     return global.DB.get('transactions', id).then((before) => {
       if (!before) throw new Error('الحركة غير موجودة');
       return global.DB.del('transactions', id)
-        .then(() => global.DB.logAudit({ entity: 'transaction', action: 'delete', entityId: id, before, after: null }));
+        .then(() => global.DB.logAudit({ entity: 'transaction', action: 'delete', entityId: id, before, after: null }))
+        .then(() => {
+          /* عظمة قبر: لا يعود السجل المحذوف من المزامنة */
+          if (global.SYNC && before.sid) global.SYNC.recordTombstones('transactions', [before.sid]).catch(() => {});
+        });
     });
   }
 
@@ -227,6 +231,7 @@
 
   function deleteMovement(group) {
     if (group.groupId) {
+      const deadSids = [];
       return global.DB.open().then((db) => new Promise((resolve, reject) => {
         const t = db.transaction(['transactions', 'audit'], 'readwrite');
         const txStore = t.objectStore('transactions');
@@ -235,7 +240,7 @@
         getAllReq.onsuccess = () => {
           const children = (getAllReq.result || []).filter((r) => r.groupId === group.groupId);
           removed = children.length;
-          children.forEach((c) => txStore.delete(c.id));
+          children.forEach((c) => { if (c.sid) deadSids.push(c.sid); txStore.delete(c.id); });
           t.objectStore('audit').add({
             entity: 'movement', action: 'delete', entityId: null,
             before: children, after: null, at: new Date().toISOString(),
@@ -244,7 +249,10 @@
         t.oncomplete = () => resolve({ removed });
         t.onerror = () => reject(t.error);
         t.onabort = () => reject(t.error || new Error('transaction aborted'));
-      }));
+      })).then((res) => {
+        if (global.SYNC && deadSids.length) global.SYNC.recordTombstones('transactions', deadSids).catch(() => {});
+        return res;
+      });
     }
     /* legacy single row */
     return deleteTransaction(group.legacyId);
@@ -614,13 +622,14 @@
       return Promise.reject(new Error('لا توجد أسطر لحذف هذا الإذن'));
     }
     const ids = voucher.rowIds.filter((x) => x != null);
+    const deadSids = [];
     return global.DB.atomic(['transactions', 'audit'], (t) => {
       const txStore = t.objectStore('transactions');
       const before = [];
       ids.forEach((id) => {
         const g = txStore.get(id);
         g.onsuccess = () => {
-          if (g.result) { before.push(g.result); txStore.delete(id); }
+          if (g.result) { before.push(g.result); if (g.result.sid) deadSids.push(g.result.sid); txStore.delete(id); }
         };
       });
       t.objectStore('audit').add({
@@ -631,6 +640,9 @@
           : `حذف حركة صرف — ${ids.length} مقاس`,
       });
       return { removed: ids.length };
+    }).then((res) => {
+      if (global.SYNC && deadSids.length) global.SYNC.recordTombstones('transactions', deadSids).catch(() => {});
+      return res;
     });
   }
 
@@ -895,6 +907,7 @@
   }
 
   function deleteReel(reelId) {
+    let deadSid = null;
     return global.DB.atomic(['reels', 'transactions', 'audit'], (t, setFail) => {
       const reelStore = t.objectStore('reels');
       const g = reelStore.get(reelId);
@@ -907,6 +920,7 @@
             : 'لا يمكن حذف بكرة مصروفة — احذف أو عدّل إذن الصرف أولًا.'] });
           t.abort(); return;
         }
+        deadSid = reel.sid || reel.id;
         reelStore.delete(reelId);
         if (reel.source === 'reels') {
           const txStore = t.objectStore('transactions');
@@ -919,11 +933,16 @@
           details: `حذف بكرة ${reel.rollNo}/${reel.reelNo}`,
         });
       };
-      return { ok: true };
+      return { ok: true, deadSid };
+    }).then((res) => {
+      if (global.SYNC && res && res.deadSid) global.SYNC.recordTombstones('reels', [res.deadSid]).catch(() => {});
+      return res;
     });
   }
 
   function deleteRoll(rollNo) {
+    const deadRollSid = [];
+    const deadReelSids = [];
     return global.DB.atomic(['rolls', 'reels', 'transactions', 'audit'], (t, setFail) => {
       const reelStore = t.objectStore('reels');
       const rollStore = t.objectStore('rolls');
@@ -937,9 +956,13 @@
         }
         const rollGet = rollStore.index('rollNo').get(rollNo);
         rollGet.onsuccess = () => {
-          if (rollGet.result) rollStore.delete(rollGet.result.id);
+          if (rollGet.result) {
+            deadRollSid.push(rollGet.result.sid || rollGet.result.id);
+            rollStore.delete(rollGet.result.id);
+          }
           const txStore = t.objectStore('transactions');
           reels.forEach((r) => {
+            deadReelSids.push(r.sid || r.id);
             reelStore.delete(r.id);
             if (r.source === 'reels') {
               const byReel = txStore.index('reelId').get(r.id);
@@ -955,6 +978,12 @@
         };
       };
       return { ok: true };
+    }).then((res) => {
+      if (global.SYNC) {
+        if (deadRollSid.length) global.SYNC.recordTombstones('rolls', deadRollSid).catch(() => {});
+        if (deadReelSids.length) global.SYNC.recordTombstones('reels', deadReelSids).catch(() => {});
+      }
+      return res;
     });
   }
 
@@ -1468,18 +1497,20 @@
 
   /* ---------- delete permit (restore stock + reels) ---------- */
   function deletePermit(permitId) {
+    const deadPermitSids = [], deadTxSids = [];
     return global.DB.atomic(['permits', 'transactions', 'reels', 'audit'], (t, setFail) => {
       const g = t.objectStore('permits').get(permitId);
       g.onsuccess = () => {
         const permit = g.result;
         if (!permit) { setFail(new Error('الإذن غير موجود')); t.abort(); return; }
+        deadPermitSids.push(permit.sid || permit.id);
         const reelStore = t.objectStore('reels');
         if (permit.status === 'approved' && permit.groupId) {
           const txStore = t.objectStore('transactions');
           const byGroup = txStore.index('groupId').getAll(permit.groupId);
           byGroup.onsuccess = () => {
             const rows = byGroup.result || [];
-            rows.forEach((r) => txStore.delete(r.id));
+            rows.forEach((r) => { if (r.sid) deadTxSids.push(r.sid); txStore.delete(r.id); });
             /* free reels referenced by the permit */
             const reelIds = [];
             for (const l of permit.lines || []) for (const id of (l.reelIds || [])) reelIds.push(id);
@@ -1505,6 +1536,12 @@
         }
       };
       return { ok: true };
+    }).then((res) => {
+      if (global.SYNC) {
+        if (deadPermitSids.length) global.SYNC.recordTombstones('permits', deadPermitSids).catch(() => {});
+        if (deadTxSids.length) global.SYNC.recordTombstones('transactions', deadTxSids).catch(() => {});
+      }
+      return res;
     });
   }
 

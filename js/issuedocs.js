@@ -201,16 +201,24 @@
 
   /* ================= أذون الصرف — list page ================= */
   function renderIssuedocs(host) {
+    const keeper = global.PERM && global.PERM.isWarehouse();
+    /* قاعدة اليومين: نافذة ثابتة بتوقيت مصر (اليوم + الأمس) — لا يعتمد
+       على تاريخ يختاره المستخدم، وتُحدَّث تلقائيًا عند بداية يوم جديد */
+    const winFrom = keeper ? global.PERM.keeperWindowStart() : '';
+    const winTo = keeper ? global.PERM.cairoToday() : '';
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('issuedocs'))}</h2>
         <div class="head-actions">
-          <button class="btn btn-primary" id="docs-new">+ ${ar() ? 'إذن صرف جديد' : 'New issue permit'}</button>
-          <button class="btn btn-ghost" id="docs-exp">${t('exportExcel')}</button>
+          ${keeper ? '' : `<button class="btn btn-primary" id="docs-new">+ ${ar() ? 'إذن صرف جديد' : 'New issue permit'}</button>
+          <button class="btn btn-ghost" id="docs-exp">${t('exportExcel')}</button>`}
         </div></div>
+      ${keeper ? `<div class="card notice-card"><strong>صلاحيات العرض والطباعة فقط</strong>
+        <div class="small muted">تعرض أذون اليوم ${fmtDate(winTo)} والأمس ${fmtDate(winFrom)} بتوقيت مصر — تُحدَّث النافذة تلقائيًا عند بداية يوم جديد.
+        لا يمكنك إضافة أو تعديل أو حذف أو اعتماد أذون، ولا عرض الأذون الأقدم (محجوب من قاعدة البيانات نفسها).</div></div>` : ''}
       <div class="card filters">
         <input type="text" id="doc-q" placeholder="${ar() ? 'بحث برقم الإذن أو اسم العميل…' : 'Search voucher no. / customer…'}">
-        <input type="date" id="doc-from" title="${t('from')}">
-        <input type="date" id="doc-to" title="${t('to')}">
+        <input type="date" id="doc-from" title="${t('from')}" value="${esc(winFrom)}" ${keeper ? 'readonly' : ''}>
+        <input type="date" id="doc-to" title="${t('to')}" value="${esc(winTo)}" ${keeper ? 'readonly' : ''}>
         <select id="doc-cls">
           <option value="">${t('classification')}: ${t('all')}</option>
           <option value="ض">${t('tax')}</option>
@@ -234,10 +242,10 @@
 
     function applyFilters() {
       const q = host.querySelector('#doc-q').value.trim().toLowerCase();
-      const from = host.querySelector('#doc-from').value;
-      const to = host.querySelector('#doc-to').value;
+      const from = keeper ? winFrom : host.querySelector('#doc-from').value;
+      const to = keeper ? winTo : host.querySelector('#doc-to').value;
       const cls = host.querySelector('#doc-cls').value;
-      const status = host.querySelector('#doc-status').value;
+      const status = keeper ? '' : host.querySelector('#doc-status').value;
       const sort = host.querySelector('#doc-sort').value;
       docs = App.collectVouchers(App.state.transactions, App.state.permits).filter((d) =>
         (!from || d.date >= from) && (!to || d.date <= to) &&
@@ -339,14 +347,17 @@
       const weightCell = d.totalWeightKg == null
         ? `<span class="muted">${ar() ? 'تقديري' : 'est.'}</span>`
         : `${fmtNum(d.totalWeightKg, 3)}${d.weightEstimated ? ` <span class="muted small">(${ar() ? 'جزئي' : 'partial'})</span>` : ''}`;
+      const keeper = global.PERM && global.PERM.isWarehouse();
       const actions = [];
       actions.push(`<button class="icon-btn" data-act="view" data-key="${esc(d.key)}" title="${t('viewDoc')}">👁</button>`);
       actions.push(`<button class="icon-btn" data-act="print" data-key="${esc(d.key)}" title="${t('printDoc')}">🖨</button>`);
-      actions.push(`<button class="icon-btn" data-act="edit" data-key="${esc(d.key)}" title="${t('edit')}">✎</button>`);
-      if (d.kind === 'permit' && d.status === 'draft') {
-        actions.push(`<button class="icon-btn approve" data-act="approve" data-key="${esc(d.key)}" title="${ar() ? 'اعتماد الإذن وخصم الرصيد' : 'Approve'}">✔</button>`);
+      if (!keeper) {
+        actions.push(`<button class="icon-btn" data-act="edit" data-key="${esc(d.key)}" title="${t('edit')}">✎</button>`);
+        if (d.kind === 'permit' && d.status === 'draft') {
+          actions.push(`<button class="icon-btn approve" data-act="approve" data-key="${esc(d.key)}" title="${ar() ? 'اعتماد الإذن وخصم الرصيد' : 'Approve'}">✔</button>`);
+        }
+        actions.push(`<button class="icon-btn danger" data-act="del" data-key="${esc(d.key)}" title="${t('del')}">🗑</button>`);
       }
-      actions.push(`<button class="icon-btn danger" data-act="del" data-key="${esc(d.key)}" title="${t('del')}">🗑</button>`);
       return `<tr class="voucher-row ${d.kind === 'permit' && d.status === 'draft' ? 'row-draft' : ''}">
         <td data-label="${t('docNo')}"><button class="voucher-no" data-act="view" data-key="${esc(d.key)}" title="${t('viewDoc')}">${esc(d.permitNo || '—')}</button>
           ${d.multiDate ? `<span class="badge badge-multi" title="${ar() ? 'الإذن له أكثر من تاريخ — المعتمد الأحدث' : ''}">${ar() ? 'أحدث تاريخ' : 'latest date'}</span>` : ''}</td>
@@ -366,12 +377,23 @@
     host.querySelector('#doc-status').addEventListener('change', applyFilters);
     host.querySelector('#doc-sort').addEventListener('change', applyFilters);
     host.querySelector('#doc-clear').addEventListener('click', () => {
-      ['#doc-q', '#doc-from', '#doc-to', '#doc-cls', '#doc-status'].forEach((s) => { host.querySelector(s).value = ''; });
+      ['#doc-q', '#doc-cls'].forEach((s) => { host.querySelector(s).value = ''; });
+      if (!keeper) {
+        host.querySelector('#doc-from').value = '';
+        host.querySelector('#doc-to').value = '';
+        host.querySelector('#doc-status').value = '';
+      } else {
+        host.querySelector('#doc-from').value = winFrom;
+        host.querySelector('#doc-to').value = winTo;
+        host.querySelector('#doc-status').value = '';
+      }
       host.querySelector('#doc-sort').value = 'new';
       applyFilters();
     });
-    host.querySelector('#docs-new').addEventListener('click', () => { App.pendingEdit = null; App.navigate('baker-issue'); });
-    host.querySelector('#docs-exp').addEventListener('click', () => {
+    const newBtn = host.querySelector('#docs-new');
+    if (newBtn) newBtn.addEventListener('click', () => { App.pendingEdit = null; App.navigate('baker-issue'); });
+    const expBtn = host.querySelector('#docs-exp');
+    if (expBtn) expBtn.addEventListener('click', () => {
       const headers = [t('docNo'), t('customer'), t('date'), t('classification'), ar() ? 'الحالة' : 'Status',
         t('quality'), t('gsm'), t('size'), t('outQty'), `${t('voucherWeight')} (${t('kg')})`];
       const rows = [];
@@ -392,6 +414,12 @@
 
   /* ================= نموذج الإذن (مسودة + اعتماد + اختيار البكر) ================= */
   function bakerIssueForm(host, editTarget) {
+    /* أمين المخزن لا يملك إنشاء أو تعديل أذون — حارس مزدوج فوق بوابة المسارات */
+    if (global.PERM && global.PERM.isWarehouse()) {
+      host.innerHTML = `<div class="card error-card">لا تملك صلاحية إنشاء أو تعديل أذون الصرف —
+        صلاحياتك للعرض والطباعة فقط. أذون آخر يومين متاحة في قسم «أذون الصرف».</div>`;
+      return;
+    }
     /* editTarget: null → إذن جديد | {kind:'permit', voucher} → مسودة/معتمد | {kind:'legacy', voucher} → إذن قديم مستورد */
     const isEdit = !!editTarget;
     const kind = editTarget ? editTarget.kind : null;
@@ -811,6 +839,7 @@
 
   /* ================= إذن صرف — عرض/طباعة A4 من اللقطة المحفوظة ================= */
   function renderIssuedoc(host) {
+    const keeper = global.PERM && global.PERM.isWarehouse();
     const d = App.pendingDoc;
     if (!d) { host.innerHTML = '<div class="card error-card">لم يتم تحديد إذن — ارجع إلى أذون الصرف.</div>'; return; }
     const company = App.state.settings.companyName || (ar() ? 'إدارة المخزن' : 'Inventory Management');
@@ -876,8 +905,8 @@
       <div class="page-head"><h2>${esc(t('issuedoc'))} ${d.permitNo ? '— ' + esc(d.permitNo) : ''}</h2>
         <div class="head-actions doc-actions">
           <button class="btn btn-primary" id="docv-print">🖨 ${t('printDoc')} (A4)</button>
-          ${d.kind === 'permit' && d.status === 'draft' ? `<button class="btn btn-primary" id="docv-approve">✔ ${ar() ? 'اعتماد الإذن' : 'Approve'}</button>` : ''}
-          <button class="btn btn-ghost" id="docv-edit">✎ ${t('edit')}</button>
+          ${!keeper && d.kind === 'permit' && d.status === 'draft' ? `<button class="btn btn-primary" id="docv-approve">✔ ${ar() ? 'اعتماد الإذن' : 'Approve'}</button>` : ''}
+          ${!keeper ? `<button class="btn btn-ghost" id="docv-edit">✎ ${t('edit')}</button>` : ''}
           <button class="btn btn-ghost" id="docv-back">${ar() ? '← رجوع لأذون الصرف' : '← Back'}</button>
         </div></div>
       <div id="print-root">
@@ -913,7 +942,8 @@
       </div>`;
 
     host.querySelector('#docv-print').addEventListener('click', () => window.print());
-    host.querySelector('#docv-edit').addEventListener('click', () => { App.pendingEdit = d; App.navigate('baker-issue'); });
+    const editBtn = host.querySelector('#docv-edit');
+    if (editBtn) editBtn.addEventListener('click', () => { App.pendingEdit = d; App.navigate('baker-issue'); });
     const approveBtn = host.querySelector('#docv-approve');
     if (approveBtn) approveBtn.addEventListener('click', async () => {
       const ok = await confirmDialog({

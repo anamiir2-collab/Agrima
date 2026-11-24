@@ -175,6 +175,25 @@
     baker: 'rolls',
     'baker-add': 'reels-add',
   };
+  /* label of a route for the document title — explicit map for the dashed
+     routes whose ids don't match i18n keys (audit fix V4), and a safe
+     fallback that never prints a raw route id */
+  const ROUTE_LABEL_KEYS = {
+    'reels-add': 'reelsAdd', 'baker-issue': 'issuedocs', 'issuedoc': 'issuedoc',
+    'reservation-details': 'reservationDetails', 'reservation-form': 'reservationForm',
+    'addtx': 'addtx', 'purchase-form': 'purchaseForm', 'purchase-details': 'purchaseDetails',
+    'purchases-reports': 'purchaseReports', 'rolls': 'rollsRoute',
+  };
+  function routeTitle(route) {
+    const key = ROUTE_LABEL_KEYS[route] || route;
+    const label = I18N_OR(key);
+    return label && label !== key ? label : t('appName');
+  }
+  function I18N_OR(key) {
+    const lang2 = UI.getLang() === 'en' ? 'en' : 'ar';
+    return (UI.I18N[lang2] && UI.I18N[lang2][key]) || (lang2 === 'en' ? UI.I18N.ar[key] : undefined);
+  }
+
   let currentRoute = 'dashboard';
   function render() {
     const view = App.views[currentRoute] || App.views.dashboard;
@@ -197,7 +216,7 @@
     document.querySelectorAll('.nav-item').forEach((n) => {
       n.classList.toggle('active', n.dataset.route === target);
     });
-    document.title = `${t(target) || ''} — ${t('appName')}`;
+    document.title = `${routeTitle(target)} — ${t('appName')}`;
     render();
     closeMobileNav();
   }
@@ -461,8 +480,8 @@
           await global.TX.replaceMovement(existing, pending);
           toast(ar() ? 'تم تحديث الحركة وتحديث الرصيد تلقائيًا' : 'movement updated, balances recalculated', 'ok');
         } else {
-          const groupId = nextGroupId();
-          for (const line of pending) await global.TX.addTransaction(Object.assign({ groupId }, line));
+          /* one atomic multi-row movement (no partial writes on failure) */
+          await global.TX.addTransactionGroup(pending);
           toast(ar()
             ? `تم تسجيل ${pending.length} مقاس وتحديث الأرصدة`
             : `${pending.length} size(s) saved and balances updated`, 'ok');
@@ -917,7 +936,7 @@
             const hasAdd = full.add > 0, hasOut = full.out > 0;
             if (hasAdd && hasOut) { App.pendingEdit = { type: 'mixed', group: full }; navigate('addtx'); }
             else if (hasOut) { App.pendingEdit = { type: 'issue', group: full }; navigate('baker-issue'); }
-            else { toast(lang ? 'حركة الإنتاج تُعد من «إدارة الرولات والبكر»' : '', 'info'); }
+            else { toast(lang ? 'حركة الإنتاج تُعد من «إدارة الرولات والبكر»' : 'Production movements are edited from Rolls & reels', 'info'); }
           } else if (act === 'del') {
             const ok = await confirmDialog({
               title: lang ? 'حذف حركة' : 'Delete movement',
@@ -1062,13 +1081,18 @@
     const tx = App.state.transactions;
     const g = global.CALC.grandTotals(tx);
     const products = App.state.products;
+    /* الإجماليات مطابقة لشاشة الرصيد والتقرير: البكر الموجودة فعليًا
+       (net > 0) عبر كل التركيبات من محرك الحساب القائم نفسه — لا أعداد
+       سالبة ولا مضاعفة (audit fix V2). */
     let stockTotal = 0, weightTotal = 0;
-    for (const p of products) {
-      const b = App.state.balances.get(p.combo);
-      const net = b ? b.net : 0;
-      stockTotal += net;
-      weightTotal += global.CALC.productWeight(p.size, net, App.state.settings.weightFactor);
+    for (const b of App.state.balances.values()) {
+      if (Number(b.net) > 0) {
+        stockTotal += b.net;
+        weightTotal += global.CALC.productWeight(b.size, b.net, App.state.settings.weightFactor);
+      }
     }
+    stockTotal = global.CALC.round6(stockTotal);
+    weightTotal = global.CALC.round6(weightTotal);
     const nProduction = buildGroups(tx.filter((r) => (Number(r.addQty) || 0) > 0 && r.source !== 'reels')).length;
     const nReelMovements = tx.filter((r) => r.source === 'reels').length;
     /* أذون التطبيق (مسودات + معتمدة) + الأذون المشتقة من الحركات */

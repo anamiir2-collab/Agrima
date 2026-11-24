@@ -15,7 +15,7 @@
      rolls        { id, rollNo (unique), gram, date, notes, source,
                     createdAt, updatedAt }                (id auto)
      reels        { id (uuid), rollNo, reelNo, size, weight, gram, quality,
-                    status: 'available'|'dispatched'|'undefined',
+                    status: 'available'|'dispatched'|'returned'|'undefined',
                     permitRef, source, rollReel (unique "rollNo|reelNo"),
                     createdAt, updatedAt }
      permits      { id (uuid), permitNo, cls 'ض'|'غ', customer, date, notes,
@@ -23,16 +23,41 @@
                     createdAt, approvedAt, source }
      customers    { id, name (unique), notes, source, createdAt }
      importlog    { key (file fingerprint), fileName, kind, at, summary }
+
+   Stores added in v3 (procurement — strictly additive as well; the v2→v3
+   upgrade only CREATES the four stores below and never reads, rewrites or
+   deletes any existing record or store):
+     suppliers    { id (auto), code 'SUP-####' (unique), nameKey (unique
+                    normalized name), name, phone, address, contact, notes,
+                    archived, createdAt, updatedAt }
+     purchases    { id (uuid), seq (numeric, display P-####), supplierId,
+                    supplierName, supplierInvoiceNo, invoiceDate, lines[],
+                    subtotal, extraCosts, discount, finalTotal, paid, notes,
+                    status: 'draft'|'partial'|'received'|'cancelled',
+                    createdAt, updatedAt }
+     receives     { id (uuid), purchaseId, purchaseSeq, lineId, reelId,
+                    rollNo, reelNo, quality, gsm, size, qty, weight,
+                    weightSource 'actual'|'none', date, notes, createdAt }
+                  — reelId is UNIQUE: one reel can be received/linked for
+                    exactly one purchase invoice, ever.
+     supreturns   { id (uuid), seq (numeric, display RT-####), supplierId,
+                    supplierName, purchaseId, purchaseSeq, date, reason,
+                    notes, lines[{lineId, quality, gsm, size, qty, reelIds,
+                    weight}], status 'active'|'cancelled', cancelledAt,
+                    cancelReason, createdAt, updatedAt }
+   Procurement changes are audited in the existing `audit` store with
+   entity 'supplier' | 'purchase' | 'receive' | 'return'.
    ========================================================================= */
 (function (global) {
   'use strict';
 
   const DB_NAME = 'inventory_pwa_db';
-  /* v2: adds rolls / reels / permits / customers / importlog. The upgrade
-     handler below ONLY creates object stores & indexes — existing stores,
-     keys and records are never read, rewritten or deleted, so upgrading a
-     live user database is purely additive (safe migration). */
-  const DB_VERSION = 2;
+  /* v2: rolls / reels / permits / customers / importlog.
+     v3: suppliers / purchases / receives / supreturns (procurement).
+     The upgrade handler below ONLY creates object stores & indexes —
+     existing stores, keys and records are never read, rewritten or deleted,
+     so upgrading a live user database is purely additive (safe migration). */
+  const DB_VERSION = 3;
 
   let _db = null;
   let _openPromise = null;
@@ -119,6 +144,34 @@
         }
         if (!db.objectStoreNames.contains('importlog')) {
           db.createObjectStore('importlog', { keyPath: 'key' });
+        }
+        /* ---- v3 stores (procurement: suppliers & purchases) ---- */
+        if (!db.objectStoreNames.contains('suppliers')) {
+          const s = db.createObjectStore('suppliers', { keyPath: 'id', autoIncrement: true });
+          s.createIndex('code', 'code', { unique: true });
+          s.createIndex('nameKey', 'nameKey', { unique: true });
+          s.createIndex('archived', 'archived', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('purchases')) {
+          const s = db.createObjectStore('purchases', { keyPath: 'id' });
+          s.createIndex('seq', 'seq', { unique: true });
+          s.createIndex('supplierId', 'supplierId', { unique: false });
+          s.createIndex('status', 'status', { unique: false });
+          s.createIndex('invoiceDate', 'invoiceDate', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('receives')) {
+          const s = db.createObjectStore('receives', { keyPath: 'id' });
+          s.createIndex('purchaseId', 'purchaseId', { unique: false });
+          s.createIndex('reelId', 'reelId', { unique: true }); /* one reel ↔ one purchase, ever */
+          s.createIndex('lineId', 'lineId', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('supreturns')) {
+          const s = db.createObjectStore('supreturns', { keyPath: 'id' });
+          s.createIndex('seq', 'seq', { unique: true });
+          s.createIndex('supplierId', 'supplierId', { unique: false });
+          s.createIndex('purchaseId', 'purchaseId', { unique: false });
+          s.createIndex('status', 'status', { unique: false });
+          s.createIndex('date', 'date', { unique: false });
         }
       };
       req.onsuccess = () => {
@@ -233,19 +286,35 @@
       });
     },
 
-    /* wipe everything (used only from explicit "reset" in settings,
-       requires typed confirmation in the UI) */
+    /* wipe everything (used only from explicit "reset" in settings and from
+       restore, requires typed confirmation in the UI). Clears every store —
+       including the v3 procurement stores — and resets all sequences. */
     wipeAll() {
       return Promise.all([
         DB.clear('products'), DB.clear('transactions'), DB.clear('audit'),
         DB.clear('rolls'), DB.clear('reels'), DB.clear('permits'),
         DB.clear('customers'), DB.clear('importlog'),
+        DB.clear('suppliers'), DB.clear('purchases'),
+        DB.clear('receives'), DB.clear('supreturns'),
       ]).then(() => Promise.all([
         DB.setSetting('lastImport', null),
         DB.setSetting('docSeqTax', null),
         DB.setSetting('docSeqNontax', null),
         DB.setSetting('rollSeq', null),
+        DB.setSetting('supplierSeq', null),
+        DB.setSetting('purchaseSeq', null),
+        DB.setSetting('returnSeq', null),
       ]));
+    },
+
+    /* Replace ONLY the balance-file scope (products + transactions). Used by
+       the Excel "import & replace" flow: roll/reel details, permits,
+       customers and all procurement stores survive — the dialog announces
+       exactly this scope. Sequences self-heal from the new rows. */
+    wipeBalanceScope() {
+      return Promise.all([
+        DB.clear('products'), DB.clear('transactions'),
+      ]);
     },
   };
 

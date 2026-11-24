@@ -17,6 +17,12 @@
       additions: 'إنتاج وإضافات', withdrawals: 'الصرف والمبيعات', history: 'سجل الحركات',
       reports: 'التقارير', products: 'إدارة الأصناف', backup: 'النسخ الاحتياطي',
       settings: 'الإعدادات',
+      /* v9: قسم المشتريات والموردين + فك تعارض مفتاح rolls (كان يعني الوحدة
+         «بكرة» فكسر عنوان القسم بعد تبديل اللغة — audit fix V3) */
+      rollsRoute: 'إدارة الرولات والبكر', rollsShort: 'الرولات',
+      suppliers: 'الموردون', purchases: 'المشتريات',
+      purchaseForm: 'فاتورة شراء', purchaseDetails: 'تفاصيل فاتورة الشراء',
+      purchaseReports: 'تقارير المشتريات',
       // issue documents
       rollWeight: 'وزن البكرة (كجم)', classification: 'التصنيف',
       tax: 'ضريبي', nontax: 'غير ضريبي', docNo: 'رقم الإذن',
@@ -61,6 +67,10 @@
       additions: 'Additions', withdrawals: 'Withdrawals', history: 'History',
       reports: 'Reports', products: 'Products', backup: 'Backup & Restore',
       settings: 'Settings',
+      rollsRoute: 'Rolls & reels', rollsShort: 'Reels',
+      suppliers: 'Suppliers', purchases: 'Purchases',
+      purchaseForm: 'Purchase invoice', purchaseDetails: 'Purchase invoice details',
+      purchaseReports: 'Purchases & suppliers reports',
       rollWeight: 'Bale weight (kg)', classification: 'Classification',
       tax: 'Tax', nontax: 'Non-tax', docNo: 'Voucher No.',
       addGroup: 'Add group', addSizeRow: 'Add size',

@@ -1,0 +1,12 @@
+{
+  "name": "agrima-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Agrima automated test suite (Node + fake-indexeddb). The application itself is a static PWA with zero build step and zero runtime dependencies.",
+  "scripts": {
+    "test": "node tests/test-agrima.js"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0"
+  }
+}

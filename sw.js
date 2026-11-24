@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v8-reservations-r3';
+const CACHE = 'agrima-v9-procurement-r1';
 
 const PRECACHE = [
   './',
@@ -26,6 +26,7 @@ const PRECACHE = [
   './js/reservations.js',
   './js/reports.js',
   './js/backup.js',
+  './js/purchases.js',
   './vendor/xlsx.full.min.js',
   './vendor/chart.umd.min.js',
   './assets/icons/icon-192.png',

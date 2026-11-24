@@ -48,9 +48,14 @@
       }));
       const totalRolls = lines.reduce((s, l) => s + l.qty, 0);
       const knownWeight = lines.some((l) => l.weightKg != null);
-      const totalWeightKg = knownWeight
-        ? global.CALC.round6(lines.reduce((s, l) => s + (l.weightKg || 0), 0))
-        : null;
+      /* الوزن من اللقطة المعتمدة نفسها (p.totals) إن وُجد — نفس ما تطبعه
+           الشاشة، لا تناقص بين القائمة والطباعة للأوزان اليدوية (audit V7) */
+      const approvedTotals = (p.status === 'approved' && p.totals) ? p.totals : null;
+      const totalWeightKg = approvedTotals && approvedTotals.weightKg != null
+        ? global.CALC.round6(approvedTotals.weightKg)
+        : (knownWeight
+          ? global.CALC.round6(lines.reduce((s, l) => s + (l.weightKg || 0), 0))
+          : null);
       out.push({
         key: 'PT|' + p.id,
         kind: 'permit',
@@ -69,7 +74,8 @@
         source: p.source || 'permit',
         totalRolls,
         totalWeightKg,
-        weightEstimated: p.totals ? !!p.totals.weightEstimated : (totalWeightKg == null && totalRolls > 0),
+        weightEstimated: approvedTotals ? !!approvedTotals.weightEstimated
+          : (totalWeightKg == null && totalRolls > 0),
         minId: 0,
         createdAt: p.createdAt,
       });

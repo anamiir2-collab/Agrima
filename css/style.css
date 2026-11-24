@@ -746,3 +746,27 @@ body.modal-open { overflow: hidden; }
   .resv-item-row { grid-template-columns: 1fr 1fr; }
   .resv-item-row .resv-est, .resv-item-row .resv-item-actions { grid-column: 1 / -1; }
 }
+
+/* =========================================================================
+   v9 — الموردون والمشتريات (suppliers.js / purchases.js)
+   نفس لغة التصميم القائمة: بطاقات، شارات الحالة القائمة، بلا أي إعادة تصميم
+   ========================================================================= */
+.pur-line, .rt-line {
+  border: 1px solid var(--line); border-inline-start: 3px solid var(--secondary);
+  border-radius: var(--radius-sm); padding: .6rem; margin-bottom: .55rem; background: #FFFDF6;
+}
+.pur-line .form-grid, .rt-line .form-grid { margin: 0; }
+@media (min-width: 900px) {
+  .pur-line .form-grid { grid-template-columns: 1.3fr .7fr .7fr .7fr .8fr .8fr .9fr auto; align-items: end; }
+  .rt-line .form-grid { grid-template-columns: 1.2fr .7fr .7fr .7fr 1.2fr auto; align-items: end; }
+}
+.pl-total { min-height: 1.2em; padding-top: .15rem; }
+.pur-receive-form .reel-row, .pur-receive-form .reel-grid-head {
+  grid-template-columns: 80px 1fr 1fr 1fr 1.1fr 40px;
+}
+.line-meta { padding: .15rem .2rem 0; }
+.pur-link-form .picker-list, .pur-return-form .picker-list {
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: .3rem; background: #FFFDF6;
+}
+/* حالة البكرة المرجعة للمورد */
+.badge-st-returned { background: var(--red-50); color: var(--danger); border: 1px solid #F3C9C9; }

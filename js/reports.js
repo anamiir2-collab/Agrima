@@ -483,74 +483,11 @@
     }
 
     function paginate(model) {
-      const meta = {
-        title: model.title,
-        company: App.state.settings.companyName || (lang() ? 'إدارة المخزن' : 'Inventory Management'),
-        subtitle: model.subtitle || [],
-        summary: model.summary || null,
-        openingClosing: model.openingClosing || null,
-        headers: model.headers,
-        totalsRow: model.totalsRow || null,
-      };
-      /* measure a sample of rows in a fixed-height probe page:
-         .rp-content clientHeight = real per-page space for rows */
-      const SAMPLE = 50;
-      const probe = buildPage(meta, model.rows.slice(0, SAMPLE), 1, 1);
-      probe.classList.add('probe');
-      probe.style.cssText = 'position:fixed; visibility:hidden; left:-9999px; top:0;';
-      document.body.appendChild(probe);
-      const contentEl = probe.querySelector('.rp-content');
-      const theadH = probe.querySelector('thead').offsetHeight;
-      const tfootEl = probe.querySelector('tfoot');
-      const tfootH = tfootEl ? tfootEl.offsetHeight : 0;
-      const trs = [...probe.querySelectorAll('tbody tr')];
-      const hs = trs.map((tr) => tr.offsetHeight);
-      const avgH = hs.length ? hs.reduce((a, b) => a + b, 0) / hs.length : 20;
-      /* read content space while the probe is STILL attached to the DOM —
-         a detached element reports clientHeight = 0 */
-      const contentSpace = contentEl.clientHeight;
-      const theadSpace = theadH;
-      const tfootSpace = tfootH;
-      probe.remove();
-      /* 46px safety margin: print metrics differ slightly from screen and
-         the signature footer must never spill onto an extra page */
-      const availH = Math.max(140, contentSpace - theadSpace - tfootSpace - 46);
-      const capacity = Math.max(5, Math.floor(availH / Math.max(avgH, 16)));
-      const total = model.rows.length;
-      const chunks = [];
-      if (total === 0) chunks.push([]);
-      for (let i = 0; i < total; i += capacity) chunks.push(model.rows.slice(i, i + capacity));
-      return chunks.map((rowsChunk, i) => buildPage(meta, rowsChunk, i + 1, chunks.length));
+      return App.paginateReport(model);
     }
 
-    function buildPage(meta, rows, pageNo, total) {
-      return el(`<div class="print-page">
-        <div class="rp-head">
-          <div class="rp-co">${esc(meta.company)}</div>
-          <div class="rp-title">${esc(meta.title)}</div>
-          <div class="rp-sub">${meta.subtitle.map((s) => `<div>${esc(s)}</div>`).join('')}</div>
-          ${meta.openingClosing ? `<div class="rp-ob">${meta.openingClosing.map((s) => `<span>${esc(s)}</span>`).join(' — ')}</div>` : ''}
-          ${meta.summary && pageNo === 1 ? `<div class="rp-ob">${meta.summary.map((s) => `<span>${esc(s)}</span>`).join(' — ')}</div>` : ''}
-          <div class="rp-meta"><span>${lang() ? 'صفحة' : 'Page'} ${pageNo} / ${total}</span><span>${lang() ? 'تاريخ الطباعة' : 'Printed'}: ${fmtDate(global.UI.todayISO())}</span></div>
-        </div>
-        <div class="rp-content">
-          <table class="rp-table">
-            <thead><tr>${meta.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
-            <tbody>${rows.length ? rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')
-              : `<tr><td colspan="${meta.headers.length}" class="empty">${lang() ? 'لا توجد بيانات' : 'No data'}</td></tr>`}</tbody>
-            ${meta.totalsRow && pageNo === total ? `<tfoot><tr>${meta.totalsRow.map((c) => `<td>${esc(c)}</td>`).join('')}</tr></tfoot>` : ''}
-          </table>
-        </div>
-        ${pageNo === total ? `<div class="rp-foot">
-          <div class="sig-row">
-            <div class="sig"><span>${lang() ? 'أمين المخزن' : 'Storekeeper'}</span><i></i></div>
-            <div class="sig"><span>${lang() ? 'المحاسب' : 'Accountant'}</span><i></i></div>
-            <div class="sig"><span>${lang() ? 'مدير المخزن' : 'Warehouse manager'}</span><i></i></div>
-          </div>
-        </div>` : ''}
-      </div>`);
-    }
-
+    /* buildPage + pagination moved to module scope (App.paginateReport) so
+       the v9 procurement reports reuse the exact same A4 engine */
     /* print & export */
     host.querySelector('#rep-print').addEventListener('click', () => {
       if (!lastModel) build();
@@ -573,6 +510,71 @@
     buildFilters();
     build();
   }
+
+  /* ---------------- module-level A4 pagination engine ----------------
+     Shared by the built-in reports and the v9 procurement reports
+     (App.paginateReport). Measures a sample of rows in a hidden probe page,
+     chunks rows to real page capacity, and stamps page numbers + summary on
+     the first page + totals & signatures on the last page only. */
+  function buildReportPage(meta, rows, pageNo, total) {
+    return el(`<div class="print-page">
+      <div class="rp-head">
+        <div class="rp-co">${esc(meta.company)}</div>
+        <div class="rp-title">${esc(meta.title)}</div>
+        <div class="rp-sub">${meta.subtitle.map((s) => `<div>${esc(s)}</div>`).join('')}</div>
+        ${meta.openingClosing ? `<div class="rp-ob">${meta.openingClosing.map((s) => `<span>${esc(s)}</span>`).join(' — ')}</div>` : ''}
+        ${meta.summary && pageNo === 1 ? `<div class="rp-ob">${meta.summary.map((s) => `<span>${esc(s)}</span>`).join(' — ')}</div>` : ''}
+        <div class="rp-meta"><span>${lang() ? 'صفحة' : 'Page'} ${pageNo} / ${total}</span><span>${lang() ? 'تاريخ الطباعة' : 'Printed'}: ${fmtDate(global.UI.todayISO())}</span></div>
+      </div>
+      <div class="rp-content">
+        <table class="rp-table">
+          <thead><tr>${meta.headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.length ? rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')
+            : `<tr><td colspan="${meta.headers.length}" class="empty">${lang() ? 'لا توجد بيانات' : 'No data'}</td></tr>`}</tbody>
+          ${meta.totalsRow && pageNo === total ? `<tfoot><tr>${meta.totalsRow.map((c) => `<td>${esc(c)}</td>`).join('')}</tr></tfoot>` : ''}
+        </table>
+      </div>
+      ${pageNo === total ? `<div class="rp-foot">
+        <div class="sig-row">
+          <div class="sig"><span>${lang() ? 'أمين المخزن' : 'Storekeeper'}</span><i></i></div>
+          <div class="sig"><span>${lang() ? 'المحاسب' : 'Accountant'}</span><i></i></div>
+          <div class="sig"><span>${lang() ? 'مدير المخزن' : 'Warehouse manager'}</span><i></i></div>
+        </div>
+      </div>` : ''}
+    </div>`);
+  }
+  App.paginateReport = function (model) {
+    const meta = {
+      title: model.title,
+      company: App.state.settings.companyName || (lang() ? 'إدارة المخزن' : 'Inventory Management'),
+      subtitle: model.subtitle || [],
+      summary: model.summary || null,
+      openingClosing: model.openingClosing || null,
+      headers: model.headers,
+      totalsRow: model.totalsRow || null,
+    };
+    const SAMPLE = 50;
+    const probe = buildReportPage(meta, (model.rows || []).slice(0, SAMPLE), 1, 1);
+    probe.classList.add('probe');
+    probe.style.cssText = 'position:fixed; visibility:hidden; left:-9999px; top:0;';
+    document.body.appendChild(probe);
+    const contentEl = probe.querySelector('.rp-content');
+    const theadH = probe.querySelector('thead').offsetHeight;
+    const tfootEl = probe.querySelector('tfoot');
+    const tfootH = tfootEl ? tfootEl.offsetHeight : 0;
+    const trs = [...probe.querySelectorAll('tbody tr')];
+    const hs = trs.map((tr) => tr.offsetHeight);
+    const avgH = hs.length ? hs.reduce((a, b) => a + b, 0) / hs.length : 20;
+    const contentSpace = contentEl.clientHeight;
+    probe.remove();
+    const availH = Math.max(140, contentSpace - theadH - tfootH - 46);
+    const capacity = Math.max(5, Math.floor(availH / Math.max(avgH, 16)));
+    const total = (model.rows || []).length;
+    const chunks = [];
+    if (total === 0) chunks.push([]);
+    for (let i = 0; i < total; i += capacity) chunks.push(model.rows.slice(i, i + capacity));
+    return chunks.map((rowsChunk, i) => buildReportPage(meta, rowsChunk, i + 1, chunks.length));
+  };
 
   global.App.registerView('reports', renderReports);
 })(window);

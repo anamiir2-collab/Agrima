@@ -53,6 +53,29 @@
     });
   }
 
+  /* ---------- legacy mixed editor (addtx): atomic multi-row movement ----------
+     The legacy unified editor used to save its rows one-by-one, so a
+     failure mid-loop could leave a PARTIAL movement. All rows now insert
+     inside ONE IndexedDB transaction (audit fix V5). */
+  function addTransactionGroup(pendingRows) {
+    const groupId = cleanStr(pendingRows.groupId) || newGroupId();
+    const rows = pendingRows.map((t) => childRowOf(t, groupId));
+    const errors = [];
+    rows.forEach((r) => errors.push(...validate(r)));
+    if (errors.length) return Promise.reject({ type: 'validation', errors });
+    return global.DB.atomic(['transactions', 'products', 'audit'], (t) => {
+      const txStore = t.objectStore('transactions');
+      rows.forEach((r) => txStore.add(r));
+      queueProductTopUp(t.objectStore('products'), rows);
+      t.objectStore('audit').add({
+        entity: 'movement', action: 'add', entityId: null, before: null, after: rows,
+        at: new Date().toISOString(),
+        details: `حركة مختلطة جديدة (${rows.length} سطر — ذرية)`,
+      });
+      return { groupId, added: rows.length };
+    });
+  }
+
   function addTransaction(t) {
     const errors = validate(t);
     if (errors.length) return Promise.reject({ type: 'validation', errors });
@@ -629,7 +652,7 @@
     }
   }
 
-  const REEL_STATUS = { available: 'متاحة', dispatched: 'مصروفة', undefined: 'غير محددة' };
+  const REEL_STATUS = { available: 'متاحة', dispatched: 'مصروفة', returned: 'مرجعة للمورد', undefined: 'غير محددة' };
 
   function validateReelInput(r) {
     const errors = [];
@@ -721,6 +744,7 @@
       const prodStore = t.objectStore('products');
       const settingsStore = t.objectStore('settings');
       let assignedNo = null;
+      const createdReelIds = []; /* exposed to the caller: purchase receiving links these ids */
       const fail = (msgs) => { saveRollWithReels._fail = msgs; try { t.abort(); } catch (e2) { /* noop */ } };
 
       /* 1) next number = max(used)+1 inside this transaction (concurrency-safe) */
@@ -767,6 +791,7 @@
               updatedAt: null,
             };
             reelStore.add(reel);
+            createdReelIds.push(reel.id);
             const row = reelProductionRow(reel, roll, groupId);
             movRows.push(row);
             txStore.add(row);
@@ -792,20 +817,24 @@
           });
         };
       };
-      return { getRollNo: () => assignedNo };
-    }).then((res) => ({ rollNo: res.getRollNo(), reels: payload.reels.length }));
+      return { getRollNo: () => assignedNo, getReelIds: () => createdReelIds.slice() };
+    }).then((res) => ({ rollNo: res.getRollNo(), reels: payload.reels.length, reelIds: res.getReelIds() }));
   }
 
   /* ---------- reel edit / delete ---------- */
+  /* 'products' MUST be in the atomic scope: the product-master top-up below
+     touches it — missing it aborted the whole edit (test-caught bug). */
   function updateReel(reelId, changes) {
-    return global.DB.atomic(['reels', 'transactions', 'rolls', 'audit'], (t, setFail) => {
+    return global.DB.atomic(['reels', 'transactions', 'rolls', 'products', 'audit'], (t, setFail) => {
       const reelStore = t.objectStore('reels');
       const g = reelStore.get(reelId);
       g.onsuccess = () => {
         const before = g.result;
         if (!before) { setFail({ type: 'validation', errors: ['البكرة غير موجودة'] }); t.abort(); return; }
-        if (before.status === 'dispatched') {
-          setFail({ type: 'validation', errors: ['لا يمكن تعديل بكرة مصروفة — تعديلها يفسد بيانات الصرف. احذف أو عدّل إذن الصرف أولًا.'] });
+        if (before.status === 'dispatched' || before.status === 'returned') {
+          setFail({ type: 'validation', errors: [before.status === 'returned'
+            ? 'لا يمكن تعديل بكرة مرجعة للمورد — تعديلها يفسد سجل المرتجع. يمكن إلغاء المرتجع أولًا لعودتها للمخزون.'
+            : 'لا يمكن تعديل بكرة مصروفة — تعديلها يفسد بيانات الصرف. احذف أو عدّل إذن الصرف أولًا.'] });
           t.abort(); return;
         }
         const merged = Object.assign({}, before, {
@@ -872,8 +901,10 @@
       g.onsuccess = () => {
         const reel = g.result;
         if (!reel) { setFail({ type: 'validation', errors: ['البكرة غير موجودة'] }); t.abort(); return; }
-        if (reel.status === 'dispatched') {
-          setFail({ type: 'validation', errors: ['لا يمكن حذف بكرة مصروفة — احذف أو عدّل إذن الصرف أولًا.'] });
+        if (reel.status === 'dispatched' || reel.status === 'returned') {
+          setFail({ type: 'validation', errors: [reel.status === 'returned'
+            ? 'لا يمكن حذف بكرة مرجعة للمورد — يمكن إلغاء المرتجع أولًا لعودتها للمخزون.'
+            : 'لا يمكن حذف بكرة مصروفة — احذف أو عدّل إذن الصرف أولًا.'] });
           t.abort(); return;
         }
         reelStore.delete(reelId);
@@ -899,9 +930,9 @@
       const byRoll = reelStore.index('rollNo').getAll(rollNo);
       byRoll.onsuccess = () => {
         const reels = byRoll.result || [];
-        const dispatched = reels.filter((r) => r.status === 'dispatched');
-        if (dispatched.length) {
-          setFail({ type: 'validation', errors: [`لا يمكن حذف الرول ${rollNo}: ${dispatched.length} بكرة مصروفة مرتبطة بأذون صرف.`] });
+        const locked = reels.filter((r) => r.status === 'dispatched' || r.status === 'returned');
+        if (locked.length) {
+          setFail({ type: 'validation', errors: [`لا يمكن حذف الرول ${rollNo}: ${locked.length} بكرة مرتبطة بأذون صرف أو مرتجعات موردين.`] });
           t.abort(); return;
         }
         const rollGet = rollStore.index('rollNo').get(rollNo);
@@ -1160,9 +1191,15 @@
           if (!reel) {
             errors.push('بكرة محددة غير موجودة في المخزون — أعد تحديد البكر من القائمة');
           } else if (reel.status === 'dispatched') {
-            if (!(ownGroupId && reel.permitRef && reel.permitRef.permitId === permit.id)) {
+            /* fixing the v7 regression caught by tests: re-approving an
+               edited permit keeps its own reels — allowed whenever the reel
+               is dispatched BY THIS SAME permit (permitRef), with or
+               without the legacy groupId */
+            if (!(reel.permitRef && reel.permitRef.permitId === permit.id)) {
               errors.push(`البكرة ${reel.rollNo}/${reel.reelNo} مصروفة بالفعل — لا يمكن صرفها مرتين`);
             }
+          } else if (reel.status === 'returned') {
+            errors.push(`البكرة ${reel.rollNo}/${reel.reelNo} مرجعة للمورد — لا يمكن صرفها. ألغِ المرتجع أولًا لعودتها للمخزون.`);
           } else if (reel.status !== 'available') {
             errors.push(`البكرة ${reel.rollNo}/${reel.reelNo} حالتها «غير محددة» (بكرة تاريخية مستوردة) — لا يمكن صرفها بالتتبع الفردي`);
           }
@@ -1482,7 +1519,7 @@
       .sort((a, b) => (a.rollNo - b.rollNo) || (a.reelNo - b.reelNo));
   }
 
-  global.TX = { fingerprint, validate, addTransaction, updateTransaction, deleteTransaction,
+  global.TX = { fingerprint, validate, addTransaction, addTransactionGroup, updateTransaction, deleteTransaction,
     setSettlement, ensureProduct, replaceMovement, deleteMovement,
     nextDocNumbers, checkIssueAvailability, saveProduction, saveIssueDocument,
     replaceIssueDocument, replaceIssueVoucher, deleteIssueVoucher, CLS_LABEL, SEQ_KEYS,

@@ -455,14 +455,17 @@
   async function commitImport(parsed, existingTx, existingProd, replaceAll) {
     const cls = classifyImport(parsed.transactions, parsed.products, existingTx, existingProd);
     if (replaceAll) {
-      await global.DB.wipeAll();
+      /* audit fix V1: "استيراد مع الاستبدال" يستبدل نطاق ملف الرصيد فقط
+         (الأصناف + الحركات). الرولات والبكر والأذون والعملاء وبيانات
+         المشتريات كلها تبقى كما هي — بدل wipeAll الذي كان يمحوها بصمت. */
+      await global.DB.wipeBalanceScope();
       const prods = parsed.products.map((p) => Object.assign({}, p, { id: undefined }));
       const txs = parsed.transactions.map((t) => Object.assign({}, t, { id: undefined }));
       await global.DB.bulkPut('products', prods.map((p) => { delete p.id; return p; }));
       await global.DB.bulkPut('transactions', txs.map((t) => { delete t.id; return t; }));
       await global.DB.logAudit({
         entity: 'database', action: 'import-replace', entityId: null, before: null, after: null,
-        details: `products=${prods.length}, tx=${txs.length}`,
+        details: `products=${prods.length}, tx=${txs.length} — نطاق الاستبدال: الأصناف والحركات فقط (الرولات والأذون والمشتريات بقيت)`,
       });
       return { cls, importedTx: txs.length, importedProd: prods.length };
     }

@@ -27,6 +27,7 @@
   const statusBadge = (s) => {
     if (s === 'available') return '<span class="badge badge-st-avail">متاحة</span>';
     if (s === 'dispatched') return '<span class="badge badge-st-disp">مصروفة</span>';
+    if (s === 'returned') return '<span class="badge badge-st-returned">مرجعة للمورد</span>';
     return '<span class="badge badge-st-undef">غير محددة</span>';
   };
 
@@ -216,6 +217,7 @@
           <option value="">${ar() ? 'حالة البكر: الكل' : 'Reel status: all'}</option>
           <option value="available">${ar() ? 'فيها بكر متاحة' : 'has available'}</option>
           <option value="dispatched">${ar() ? 'فيها بكر مصروفة' : 'has dispatched'}</option>
+          <option value="returned">${ar() ? 'فيها بكر مرجعة للمورد' : 'has returned-to-supplier'}</option>
           <option value="undefined">${ar() ? 'غير محددة (مستوردة)' : 'undefined (imported)'}</option>
         </select>
         <button class="btn btn-ghost" id="rl-clear">${t('reset')}</button>
@@ -321,13 +323,14 @@
 
     function rollStatusCounts(rollNo) {
       const rs = reelsByRoll.get(rollNo) || [];
-      let a = 0, d = 0, u = 0;
-      for (const r of rs) {
-        if (r.status === 'available') a++;
-        else if (r.status === 'dispatched') d++;
+      let a = 0, d = 0, r = 0, u = 0;
+      for (const x of rs) {
+        if (x.status === 'available') a++;
+        else if (x.status === 'dispatched') d++;
+        else if (x.status === 'returned') r++;
         else u++;
       }
-      return { a, d, u, total: rs.length, weight: rs.reduce((s, x) => s + (Number(x.weight) || 0), 0) };
+      return { a, d, r, u, total: rs.length, weight: rs.reduce((s, x) => s + (Number(x.weight) || 0), 0) };
     }
 
     function rowHtml(r) {
@@ -366,6 +369,7 @@
             <div class="stat-mini"><span>${ar() ? 'إجمالي الوزن' : 'Total weight'}</span><strong>${fmtNum(c.weight, 3)} ${t('kg')}</strong></div>
             <div class="stat-mini"><span>${ar() ? 'متاحة' : 'Available'}</span><strong>${fmtNum(c.a)}</strong></div>
             <div class="stat-mini"><span>${ar() ? 'مصروفة' : 'Dispatched'}</span><strong>${fmtNum(c.d)}</strong></div>
+            <div class="stat-mini"><span>${ar() ? 'مرجعة للمورد' : 'Returned'}</span><strong>${fmtNum(c.r || 0)}</strong></div>
             <div class="stat-mini"><span>${ar() ? 'غير محددة' : 'Undefined'}</span><strong>${fmtNum(c.u)}</strong></div>
           </div></div>
         ${roll && roll.source === 'excel' ? `<p class="muted small">${ar() ? 'بكر هذا الرول مستوردة من ملف «اجمالي المخزن 2025» — حالتها «غير محددة» ولا تدخل في حساب الرصيد (قاعدة منع مضاعفة المخزون). يمكن تصرفها كحركة كمية فقط.' : 'Imported detail reels — status «undefined», never counted in the balance.'}</p>` : ''}

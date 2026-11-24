@@ -22,11 +22,11 @@
       <div id="imp-preview"></div>
       <div class="form-error" id="imp-error"></div>
       <div class="confirm-actions">
-        <button class="btn btn-primary" id="imp-commit" disabled>${replaceMode ? (lang() ? 'استبدال كل البيانات' : 'Replace all data') : (lang() ? 'حفظ السجلات الجديدة' : 'Save new records')}</button>
+        <button class="btn btn-primary" id="imp-commit" disabled>${replaceMode ? (lang() ? 'استبدال بيانات الرصيد' : 'Replace balance data') : (lang() ? 'حفظ السجلات الجديدة' : 'Save new records')}</button>
         <button class="btn btn-ghost" id="imp-cancel">${t('cancel')}</button>
       </div></div>`);
     openModal(node, {
-      title: replaceMode ? (lang() ? 'استيراد مع استبدال البيانات' : 'Import (replace)') : (lang() ? 'استيراد ملف الإكسل' : 'Import Excel file'),
+      title: replaceMode ? (lang() ? 'استيراد مع استبدال بيانات الرصيد' : 'Import (replace balance data)') : (lang() ? 'استيراد ملف الإكسل' : 'Import Excel file'),
       wide: true,
     });
 
@@ -109,10 +109,10 @@
       if (!parsed) return;
       if (replaceMode) {
         const ok = await confirmDialog({
-          title: lang() ? '⚠ استبدال كل البيانات' : 'Replace all data',
+          title: lang() ? '⚠ استبدال بيانات الرصيد' : 'Replace balance data',
           message: lang()
-            ? `سيتم حذف جميع البيانات الحالية (${fmtNum(existing.tx.length)} حركة و ${fmtNum(existing.prod.length)} صنف) واستبدالها بمحتوى الملف. لا يمكن التراجع إلا باستعادة نسخة احتياطية. متابعة؟`
-            : `All current data (${existing.tx.length} transactions) will be replaced by the file content. Continue?`,
+            ? `سيتم استبدال الأصناف والحركات (${fmtNum(existing.tx.length)} حركة و ${fmtNum(existing.prod.length)} صنف) بمحتوى الملف فقط. تفاصيل الرولات والبكر وأذون الصرف والعملاء وبيانات المشتريات والموردون كلها تبقى كما هي. متابعة؟`
+            : `Movements (${existing.tx.length}) and products (${existing.prod.length}) are replaced by the file. Rolls, reels, permits, customers and procurement data are kept. Continue?`,
           danger: true,
         });
         if (!ok) return;
@@ -133,6 +133,85 @@
     });
   }
   global.BACKUP = { openImportDialog };
+
+  /* ================= JSON backup payload + schema validation =================
+     Module-scope pure helpers (v9): testable from Node and reused by the
+     backup view. The payload covers EVERY store — v2 inventory stores and
+     the v3 procurement stores (suppliers / purchases / receives /
+     supreturns) — plus the independent LocalStorage reservation keys. */
+  const BACKUP_STORES = [
+    'products', 'transactions', 'settings', 'rolls', 'reels', 'permits',
+    'customers', 'importlog', 'suppliers', 'purchases', 'receives', 'supreturns',
+  ];
+
+  async function buildBackupPayload() {
+    const [products, transactions, settings, audit, rolls, reels, permits, customers, importlog,
+      suppliers, purchases, receives, supreturns] = await Promise.all([
+      global.DB.getAll('products'), global.DB.getAll('transactions'),
+      global.DB.getAll('settings'), global.DB.getAudit(2000),
+      global.DB.getAll('rolls'), global.DB.getAll('reels'),
+      global.DB.getAll('permits'), global.DB.getAll('customers'),
+      global.DB.getAll('importlog'),
+      global.DB.getAll('suppliers'), global.DB.getAll('purchases'),
+      global.DB.getAll('receives'), global.DB.getAll('supreturns'),
+    ]);
+    return {
+      app: 'inventory-pwa', schema: 4, exportedAt: new Date().toISOString(),
+      products, transactions, settings, audit: audit.slice(0, 200),
+      rolls, reels, permits, customers, importlog,
+      suppliers, purchases, receives, supreturns,
+      reservationData: collectReservationData(),
+    };
+  }
+
+  /* فحص سلامة صفوف المتاجر قبل الكتابة — يمنع ملفًا تالفًا من كسر الشاشات */
+  function rowsAreSane(rows, store) {
+    if (!Array.isArray(rows)) return false;
+    const mustHave = {
+      products: ['quality'], transactions: ['date', 'quality'],
+      settings: ['key'], rolls: ['rollNo'], reels: ['id'], permits: ['id'],
+      customers: ['name'], importlog: ['key'],
+      suppliers: ['name'], purchases: ['id', 'lines'], receives: ['id', 'purchaseId'],
+      supreturns: ['id', 'lines'],
+    }[store];
+    if (!mustHave) return true; /* مخزن مستقبلي غير معروف: مقبول كما هو */
+    return rows.every((r) => r && typeof r === 'object' && mustHave.every((k) => r[k] !== undefined));
+  }
+  function validateBackupSchema(data) {
+    const errs = [];
+    if (!data || typeof data !== 'object') { errs.push('الملف ليس نسخة احتياطية صالحة'); return { errors: errs, unknown: [] }; }
+    if (data.app !== 'inventory-pwa') errs.push('وسم التطبيق غير مطابق (app !== inventory-pwa)');
+    if (!Array.isArray(data.transactions)) errs.push('سجل الحركات مفقود أو غير صالح');
+    const known = new Set(BACKUP_STORES.concat(['audit', 'reservationData', 'schema', 'exportedAt', 'app']));
+    const unknown = Object.keys(data || {}).filter((k) => !known.has(k));
+    for (const s of BACKUP_STORES) {
+      if (data[s] === undefined) continue; /* نسخة قديمة بلا متاجر جديدة — مقبولة */
+      if (!rowsAreSane(data[s], s)) errs.push(`بيانات غير سليمة في مخزن «${s}»`);
+    }
+    return { errors: errs, unknown };
+  }
+
+  const RESV_LS_KEYS = [
+    'agrima_customer_reservations',
+    'agrima_reservation_transfers',
+    'agrima_reservation_cancellations',
+    'agrima_reservation_delivery_links',
+    'agrima_reservation_audit_log',
+  ];
+  function collectReservationData() {
+    const out = {};
+    for (const k of RESV_LS_KEYS) {
+      try {
+        const raw = global.localStorage.getItem(k);
+        if (raw != null) out[k] = JSON.parse(raw);
+      } catch (e) { /* تخطي المفتاح التالف بأمان — بقية البيانات سليمة */ }
+    }
+    return out;
+  }
+
+  global.BACKUP.buildBackupPayload = buildBackupPayload;
+  global.BACKUP.validateBackupSchema = validateBackupSchema;
+  global.BACKUP.BACKUP_STORES = BACKUP_STORES;
 
   /* ================= Backup & Restore view ================= */
   function renderBackup(host) {
@@ -158,7 +237,7 @@
         </div>
         <div class="card">
           <h3>💾 ${lang() ? 'نسخة احتياطية كاملة (JSON)' : 'Full JSON backup'}</h3>
-          <p class="muted">${lang() ? `تشمل: الرصيد الافتتاحي، الحركات، الرولات، البكر وحالاتها، أذون الصرف والتسلسلين، العملاء، الأصناف والإعدادات (${fmtNum(App.state.transactions.length)} حركة — ${(App.state.permits || []).length} إذن).` : `Full backup of every store.`}</p>
+          <p class="muted">${lang() ? `تشمل: الرصيد الافتتاحي، الحركات، الرولات، البكر وحالاتها، أذون الصرف والتسلسلين، العملاء، الأصناف، الإعدادات، الموردين وفواتير الشراء وروابط الاستلام والمرتجعات (${fmtNum(App.state.transactions.length)} حركة — ${(App.state.permits || []).length} إذن).` : `Full backup of every store.`}</p>
           <div class="btn-row">
             <button class="btn btn-primary" id="bk-dl">💾 ${lang() ? 'تنزيل نسخة احتياطية' : 'Download backup'}</button>
             <button class="btn btn-warn" id="bk-restore">♻️ ${lang() ? 'استعادة من ملف' : 'Restore from file'}</button>
@@ -204,28 +283,13 @@
       }).join('') : `<div class="muted">${lang() ? 'لا توجد عمليات بعد' : 'no operations yet'}</div>`;
     });
 
-    /* ---------- JSON backup / restore ---------- */
-    /* v8: حجوزات العملاء — مفاتيح LocalStorage مستقلة تمامًا عن بيانات
-       المخزون والإنتاج وأذون الصرف (IndexedDB). التصدير يضيفها ككائن
-       إضافي، والاستعادة تكتبها فقط إن وُجدت في الملف — لا تلمس أي مفتاح
-       قائم ولا تعتمد عليها أي عملية مخزنية. */
-    const RESV_LS_KEYS = [
-      'agrima_customer_reservations',
-      'agrima_reservation_transfers',
-      'agrima_reservation_cancellations',
-      'agrima_reservation_delivery_links',
-      'agrima_reservation_audit_log',
-    ];
-    function collectReservationData() {
-      const out = {};
-      for (const k of RESV_LS_KEYS) {
-        try {
-          const raw = global.localStorage.getItem(k);
-          if (raw != null) out[k] = JSON.parse(raw);
-        } catch (e) { /* تخطي المفتاح التالف بأمان — بقية البيانات سليمة */ }
-      }
-      return out;
-    }
+    /* ---------- JSON backup / restore ----------
+       v9 (schema 4): uses the shared module helpers BACKUP.buildBackupPayload
+       and BACKUP.validateBackupSchema — every store (old + procurement) is
+       included, the schema is validated BEFORE anything is replaced, an
+       automatic backup of current data is downloaded first, old backups
+       (schema 1/2/3 without the new stores) restore fine, and unknown keys
+       are reported — never silently discarded. */
     function restoreReservationData(resv) {
       if (!resv || typeof resv !== 'object') return;
       for (const k of RESV_LS_KEYS) {
@@ -235,21 +299,7 @@
     }
 
     async function downloadBackup() {
-      const [products, transactions, settings, audit, rolls, reels, permits, customers, importlog] = await Promise.all([
-        global.DB.getAll('products'), global.DB.getAll('transactions'),
-        global.DB.getAll('settings'), global.DB.getAudit(2000),
-        global.DB.getAll('rolls'), global.DB.getAll('reels'),
-        global.DB.getAll('permits'), global.DB.getAll('customers'),
-        global.DB.getAll('importlog'),
-      ]);
-      const payload = {
-        app: 'inventory-pwa', schema: 3, exportedAt: new Date().toISOString(),
-        products, transactions, settings, audit: audit.slice(0, 200),
-        rolls, reels, permits, customers, importlog,
-        /* v8: حجوزات العملاء — مفاتيح LocalStorage مستقلة تمامًا عن المخزون،
-           تصدير/استعادة إضافي لا يلمس أي مفتاح قائم */
-        reservationData: collectReservationData(),
-      };
+      const payload = await global.BACKUP.buildBackupPayload();
       const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
       const a = document.createElement('a');
       const d = new Date(); const pad = (n) => String(n).padStart(2, '0');
@@ -257,17 +307,32 @@
       a.download = `inventory_backup_${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.json`;
       a.click();
       URL.revokeObjectURL(a.href);
-      await global.DB.logAudit({ entity: 'database', action: 'backup', entityId: null, before: null, after: null, details: `tx=${transactions.length}` });
-      toast(lang() ? `تم تنزيل النسخة الاحتياطية (${fmtNum(transactions.length)} حركة)` : `backup downloaded (${transactions.length} transactions)`, 'ok');
+      await global.DB.logAudit({ entity: 'database', action: 'backup', entityId: null, before: null, after: null,
+        details: `tx=${payload.transactions.length}, purchases=${payload.purchases.length}, suppliers=${payload.suppliers.length}` });
+      toast(lang() ? `تم تنزيل النسخة الاحتياطية (${fmtNum(payload.transactions.length)} حركة — ${fmtNum(payload.purchases.length)} فاتورة شراء)` : `backup downloaded (${payload.transactions.length} transactions)`, 'ok');
+      return payload;
     }
 
     async function restoreBackup(file) {
       try {
         const text = await file.text();
-        const data = JSON.parse(text);
-        if (data.app !== 'inventory-pwa' || !Array.isArray(data.transactions)) {
-          toast(lang() ? 'ملف النسخة الاحتياطية غير صالح (فحص السلامة لم ينجح)' : 'invalid backup file', 'err');
+        let data;
+        try { data = JSON.parse(text); } catch (e) {
+          toast(lang() ? 'الملف ليس JSON صالحًا' : 'Not a valid JSON file', 'err');
           return;
+        }
+        /* فحص المخطط أولًا — قبل أي تنزيل أو استبدال */
+        const check = global.BACKUP.validateBackupSchema(data);
+        if (check.errors.length) {
+          toast(lang()
+            ? `ملف النسخة الاحتياطية غير صالح: ${check.errors.join(' — ')}`
+            : `Invalid backup file: ${check.errors.join(' — ')}`, 'err', 7000);
+          return;
+        }
+        if (check.unknown.length) {
+          toast(lang()
+            ? `ملاحظة: ملف النسخة يحتوي مفاتيح غير معروفة لهذا الإصدار ولن تُستعاد: ${check.unknown.join('، ')} — الملف الأصلي محفوظ لديك كما هو.`
+            : `Note: unknown keys are not restored: ${check.unknown.join(', ')}`, 'info', 8000);
         }
         /* تحذير + نسخة من البيانات الحالية قبل الاستبدال */
         toast(lang() ? 'سيتم أولًا تنزيل نسخة تلقائية من بياناتك الحالية قبل الاستبدال…' : 'Downloading an automatic backup of current data first…', 'info', 5000);
@@ -275,7 +340,7 @@
         const ok = await confirmDialog({
           title: lang() ? 'استعادة نسخة احتياطية' : 'Restore backup',
           message: lang()
-            ? `⚠ تحذير: سيتم استبدال جميع البيانات الحالية بمحتوى النسخة (${fmtNum(data.transactions.length)} حركة، ${fmtNum((data.products || []).length)} صنف، ${fmtNum((data.rolls || []).length)} رول، ${fmtNum((data.permits || []).length)} إذن). تم تنزيل نسخة تلقائية من بياناتك الحالية الآن. متابعة؟`
+            ? `⚠ تحذير: سيتم استبدال جميع البيانات الحالية بمحتوى النسخة (${fmtNum(data.transactions.length)} حركة، ${fmtNum((data.products || []).length)} صنف، ${fmtNum((data.rolls || []).length)} رول، ${fmtNum((data.permits || []).length)} إذن، ${fmtNum((data.purchases || []).length)} فاتورة شراء، ${fmtNum((data.suppliers || []).length)} مورد). تم تنزيل نسخة تلقائية من بياناتك الحالية الآن. متابعة؟`
             : `Replace ALL current data with the backup? An automatic backup was downloaded first. Continue?`,
           danger: true, yesLabel: lang() ? 'استبدال البيانات' : 'Replace data',
         });
@@ -288,13 +353,18 @@
         await global.DB.bulkPut('permits', data.permits || []);
         await global.DB.bulkPut('customers', data.customers || []);
         await global.DB.bulkPut('importlog', data.importlog || []);
+        /* v9: متاجر المشتريات — اختيارية للتوافق مع النسخ القديمة */
+        await global.DB.bulkPut('suppliers', data.suppliers || []);
+        await global.DB.bulkPut('purchases', data.purchases || []);
+        await global.DB.bulkPut('receives', data.receives || []);
+        await global.DB.bulkPut('supreturns', data.supreturns || []);
         if (data.reservationData) restoreReservationData(data.reservationData);
         for (const s of data.settings || []) await global.DB.put('settings', s);
         await global.DB.logAudit({
           entity: 'database', action: 'restore', entityId: null, before: null, after: null,
-          details: `tx=${(data.transactions || []).length}, prod=${(data.products || []).length}`,
+          details: `tx=${(data.transactions || []).length}, prod=${(data.products || []).length}, purchases=${(data.purchases || []).length}, suppliers=${(data.suppliers || []).length}`,
         });
-        toast(lang() ? 'تمت الاستعادة بنجاح' : 'restore complete', 'ok');
+        toast(lang() ? 'تمت الاستعادة بنجاح — كل المتاجر القديمة والجديدة محفوظة' : 'restore complete', 'ok');
         await App.refresh();
       } catch (e) {
         console.error(e);
@@ -616,7 +686,11 @@
     });
   }
 
-  global.App.registerView('import', renderImportExport);
-  global.App.registerView('backup', renderBackup);
-  global.App.registerView('settings', renderSettings);
-})(window);
+  if (global.App && global.App.registerView) {
+    global.App.registerView('import', renderImportExport);
+    global.App.registerView('backup', renderBackup);
+    global.App.registerView('settings', renderSettings);
+  }
+})(typeof window !== 'undefined' ? window : globalThis);
+/* Node export for automated tests */
+if (typeof module !== 'undefined' && module.exports) module.exports = global.BACKUP;

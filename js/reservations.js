@@ -370,6 +370,146 @@
     return `<span class="resv-chip resv-st-${esc(status)}">${esc(resStatusLabel(status))}</span>`;
   }
 
+  /* ================= 3.5) الكشف الموحّد (شاشة + طباعة) =================
+     جدول واحد، مصدر بيانات واحد، ودوال حساب واحدة — للشاشة والطباعة معًا.
+     • كل بند حجز في صف مستقل بأعمدة ثابتة (اسم العميل / النوع / الجرام /
+       المقاس / عدد البكر / المتاح / المحمّل) وصف إجماليات في النهاية.
+     • الحجز الملغى بالكامل لا يظهر إطلاقًا (في الجدول ولا في الطباعة).
+     • عدد البكر  = المطلوب − الملغى (الإلغاء الجزئي يعدّل الرقم نفسه،
+       والكمية المحوّلة تبقى في عدد البكر للعميل صاحب الحجز الأصلي —
+       لا تُنشأ صفوف إضافية للعميل المستلم حتى لا تتضاعف الإجماليات).
+     • المتاح    = التخصيص الفعلي من الرصيد الحي (محرك القائم FCFS كما هو).
+     • المحمّل   = المحمّل فعليًا عبر أذون صرف مرتبطة + تحميل الكميات
+       المحوّلة إذا حُمّلت فعليًا فقط — الكمية المحوّلة غير المحمّلة لا تُحسب.
+     لا حسابات جديدة ولا نسخة طباعة مستقلة: الطباعة تعيد استخدام نفس الدوال
+     ونفس عنصر الجدول المعروض على الشاشة. */
+  function reservationReportRows(customerKeys) {
+    const S = computeAll();
+    const rows = [];
+    for (const r of S.reservations) {
+      if (r.cancelled) continue; /* حجز ملغى بالكامل: مستبعد نهائيًا */
+      const s = S.snapshot.get(r.id);
+      const custKey = App.canonicalCustomer(r.customer || '');
+      if (customerKeys && !customerKeys.has(custKey)) continue;
+      const voucherNos = [...new Set(s.links.map((lk) => String(lk.voucherNo || '').trim()).filter(Boolean))];
+      for (const st of s.items.values()) {
+        const qty = CALC.round6(st.required - st.cancelled);
+        if (qty <= 0) continue; /* بند ملغى بالكامل بلا تحميل/تحويل سابق */
+        rows.push({
+          reservationId: r.id, seq: r.seq, createdAt: String(r.createdAt || ''),
+          customer: r.customer || '', customerKey: custKey, date: r.date,
+          itemId: st.item.id,
+          quality: App.productFamily(st.item.quality),
+          gsm: st.item.gsm, size: st.item.size,
+          qty, available: CALC.round6(st.available),
+          loaded: CALC.round6(st.loaded + st.loadedTransferred),
+          voucherNos, status: s.status,
+        });
+      }
+    }
+    rows.sort((a, b) =>
+      a.customerKey.localeCompare(b.customerKey, 'ar') ||
+      a.createdAt.localeCompare(b.createdAt) ||
+      (Number(a.seq) || 0) - (Number(b.seq) || 0));
+    return rows;
+  }
+
+  /* الإجماليات تُحسب من نفس صفوف الكشف المعروضة فقط — لا مصدر ثانٍ */
+  function reservationReportTotals(rows) {
+    return (rows || []).reduce((acc, x) => ({
+      qty: CALC.round6(acc.qty + (Number(x.qty) || 0)),
+      available: CALC.round6(acc.available + (Number(x.available) || 0)),
+      loaded: CALC.round6(acc.loaded + (Number(x.loaded) || 0)),
+      count: acc.count + 1,
+    }), { qty: 0, available: 0, loaded: 0, count: 0 });
+  }
+
+  /* باني الجدول الموحّد — نفس العنصر للشاشة والطباعة. عمود الإجراءات يظهر
+     على الشاشة فقط ويُخفى عند الطباعة عبر css/print.css (أعمدة الطباعة = 7) */
+  function unifiedTableHtml(rows, opts) {
+    const withActions = !opts || opts.actions !== false;
+    const totals = reservationReportTotals(rows);
+    const cols = withActions ? 8 : 7;
+    const L = {
+      customer: ar() ? 'اسم العميل' : 'Customer',
+      type: ar() ? 'النوع' : 'Type',
+      gsm: ar() ? 'الجرام' : 'GSM',
+      size: ar() ? 'المقاس' : 'Size',
+      qty: ar() ? 'عدد البكر' : 'Reels',
+      available: ar() ? 'المتاح' : 'Available',
+      loaded: ar() ? 'المحمّل' : 'Loaded',
+      actions: t('actions'),
+      total: ar() ? 'الإجمالي' : 'Total',
+      items: ar() ? 'بند' : 'items',
+      empty: ar() ? 'لا توجد بنود حجوزات — ابدأ بـ«حجز جديد»' : 'No reservation items yet',
+      details: ar() ? 'تفاصيل الحجز' : 'Details',
+      trf: ar() ? 'تحويل كمية لعميل آخر' : 'Transfer',
+      cnl: ar() ? 'إلغاء كمية/حجز' : 'Cancel',
+    };
+    return `<table class="data-table resv-unified-table" id="rv-unified-table">
+      <thead><tr>
+        <th>${L.customer}</th><th>${L.type}</th>
+        <th class="num">${L.gsm}</th><th class="num">${L.size}</th>
+        <th class="num">${L.qty}</th><th class="num">${L.available}</th><th class="num">${L.loaded}</th>
+        ${withActions ? `<th class="resv-actions-col">${L.actions}</th>` : ''}
+      </tr></thead>
+      <tbody>${(rows || []).length ? rows.map((x) => `
+        <tr>
+          <td data-label="${L.customer}" class="resv-cust"><button class="voucher-no" data-open="${esc(x.reservationId)}" title="${L.details}">${esc(x.customer)}</button></td>
+          <td data-label="${L.type}">${esc(x.quality)}</td>
+          <td class="num" data-label="${L.gsm}">${fmtNum(x.gsm)}</td>
+          <td class="num" data-label="${L.size}">${fmtNum(x.size)}</td>
+          <td class="num" data-label="${L.qty}">${fmtNum(x.qty)}</td>
+          <td class="num pos" data-label="${L.available}">${fmtNum(x.available)}</td>
+          <td class="num" data-label="${L.loaded}">${fmtNum(x.loaded)}</td>
+          ${withActions ? `<td class="actions-cell">
+            <button class="icon-btn" data-open="${esc(x.reservationId)}" title="${L.details}">👁</button>
+            <button class="icon-btn" data-trf="${esc(x.reservationId)}" data-trf-item="${esc(x.itemId || '')}" title="${L.trf}">⇄</button>
+            <button class="icon-btn danger" data-cnl="${esc(x.reservationId)}" data-cnl-item="${esc(x.itemId || '')}" title="${L.cnl}">🚫</button>
+            <button class="icon-btn" data-edit="${esc(x.reservationId)}" title="${t('edit')}">✎</button>
+          </td>` : ''}
+        </tr>`).join('') : `<tr><td colspan="${cols}" class="empty">${L.empty}</td></tr>`}</tbody>
+      <tfoot><tr>
+        <td colspan="4">${L.total} (${fmtNum(totals.count)} ${L.items})</td>
+        <td class="num">${fmtNum(totals.qty)}</td>
+        <td class="num">${fmtNum(totals.available)}</td>
+        <td class="num">${fmtNum(totals.loaded)}</td>
+        ${withActions ? '<td></td>' : ''}
+      </tr></tfoot>
+    </table>`;
+  }
+  App.reservationReportRows = reservationReportRows;
+  App.reservationReportTotals = reservationReportTotals;
+  App.renderResvUnifiedTable = unifiedTableHtml;
+
+  /* ترويسة الكشف والتوقيعات — مصدر واحد للاسم النصي (شاشة + طباعة) */
+  const REPORT_LABELS = {
+    ar: {
+      company: 'شركة اجريماسترز للاستثمار والتنمية الزراعية',
+      report: 'كشف متابعة حجوزات البكر للعملاء',
+      printedAt: 'تاريخ الطباعة', sign1: 'توقيع المسؤول', sign2: 'توقيع أمين المخزن',
+    },
+    en: {
+      company: 'Agrima Company',
+      report: 'Customer Reel Reservations Follow-up Statement',
+      printedAt: 'Printed on', sign1: 'Manager signature', sign2: 'Storekeeper signature',
+    },
+  };
+  App.reservationReportLabels = () => (ar() ? REPORT_LABELS.ar : REPORT_LABELS.en);
+  const RL = () => App.reservationReportLabels();
+
+  /* توقيت الطباعة الفعلي (تاريخ + وقت) — يُحدَّث عند كل عرض وكل طباعة */
+  function printStamp() {
+    try {
+      return new Intl.DateTimeFormat(ar() ? 'ar-EG' : 'en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date());
+    } catch (e) { return new Date().toLocaleString(); }
+  }
+  function refreshPrintStamp() {
+    const d = global.document.querySelector('.resv-print-date');
+    if (d && App.currentRoute && App.currentRoute() === 'reservations') d.textContent = RL().printedAt + ': ' + printStamp();
+  }
+  App.reservationPrintStamp = printStamp;
+
   /* ================= 4) لوحة الحجوزات (#reservations) ================= */
   function renderReservations(host) {
     const S = computeAll();
@@ -379,6 +519,8 @@
       <div class="page-head"><h2>${ar() ? 'حجوزات العملاء' : 'Customer reel reservations'}</h2>
         <div class="head-actions">
           <button class="btn btn-primary" id="rv-new">+ ${ar() ? 'حجز جديد' : 'New reservation'}</button>
+          <button class="btn btn-primary resv-multi-print-btn" id="rv-print-multi" title="${ar() ? 'طباعة كشف مجمّع لعملاء محددين' : 'Print combined statement for selected customers'}">▤ ${ar() ? 'طباعة كشف مجمّع' : 'Print combined report'}</button>
+          <button class="btn btn-ghost resv-print-btn" id="rv-print">▤ ${ar() ? 'طباعة' : 'Print'}</button>
           <button class="btn btn-ghost" id="rv-trf-log">${ar() ? 'سجل التحويلات' : 'Transfer history'}</button>
           <button class="btn btn-ghost" id="rv-cnl-log">${ar() ? 'سجل الإلغاءات' : 'Cancellation history'}</button>
         </div></div>
@@ -410,83 +552,59 @@
           <option value="open">${ar() ? 'مفتوحة' : 'Open'}</option>
           <option value="loaded">${ar() ? 'مكتملة التحميل' : 'Fully loaded'}</option>
           <option value="transferred">${ar() ? 'محوّلة بالكامل' : 'Fully transferred'}</option>
-          <option value="cancelled">${ar() ? 'ملغاة' : 'Cancelled'}</option>
         </select>
         <button class="btn btn-ghost" id="rv-clear">${t('reset')}</button>
       </div>
-      <div class="card table-wrap" id="rv-table-host"></div>`;
+      <div class="card resv-report-card" id="rv-report-card">
+        <div class="resv-print-heading">
+          <div class="resv-print-company">${RL().company}</div>
+          <div class="resv-print-title">${RL().report}</div>
+          <div class="resv-print-date">${RL().printedAt}: ${printStamp()}</div>
+        </div>
+        <div class="table-wrap" id="rv-table-host"></div>
+        <div class="resv-print-signatures">
+          <div class="resv-print-sign">${RL().sign1}<span></span></div>
+          <div class="resv-print-sign">${RL().sign2}<span></span></div>
+        </div>
+      </div>`;
 
     host.querySelector('#rv-new').addEventListener('click', () => { App.pendingReservationEdit = null; App.navigate('reservation-form'); });
     host.querySelector('#rv-trf-log').addEventListener('click', () => openTransfersLog());
     host.querySelector('#rv-cnl-log').addEventListener('click', () => openCancellationsLog());
+    host.querySelector('#rv-print').addEventListener('click', () => { refreshPrintStamp(); global.print(); });
+    host.querySelector('#rv-print-multi').addEventListener('click', () => {
+      if (typeof App.openCombinedResvPicker === 'function') App.openCombinedResvPicker();
+      else toast(ar() ? 'وحدة الطباعة لم تُحمّل بعد' : 'Print module not loaded yet', 'warn');
+    });
 
     let rows = [];
+    function refreshRows() {
+      rows = App.reservationReportRows(null);
+      applyFilters();
+    }
     function applyFilters() {
       const q = host.querySelector('#rv-q').value.trim().toLowerCase();
       const st = host.querySelector('#rv-status').value;
-      rows = S.reservations.map((r) => ({ r, s: S.snapshot.get(r.id) })).filter(({ r, s }) => {
-        if (st && s.status !== st) return false;
+      const filtered = rows.filter((x) => {
+        if (st && x.status !== st) return false;
         if (!q) return true;
-        const cust = String(r.customer || '').toLowerCase();
-        const noteHit = s.links.some((lk) => String(lk.voucherNo || '').toLowerCase().includes(q));
-        const sizeHit = (r.items || []).some((it) => String(it.size) === q || String(it.gsm) === q);
-        return cust.includes(q) || noteHit || sizeHit;
+        const hitCust = String(x.customer || '').toLowerCase().includes(q);
+        const hitType = String(x.quality || '').toLowerCase().includes(q);
+        const hitSize = String(x.size) === q || String(x.gsm) === q;
+        const hitNote = (x.voucherNos || []).some((v) => v.toLowerCase().includes(q));
+        return hitCust || hitType || hitSize || hitNote;
       });
-      rows.sort((a, b) => String(b.r.createdAt || '').localeCompare(String(a.r.createdAt || '')));
-      renderRows();
+      renderRows(filtered);
     }
 
-    function renderRows() {
+    /* نفس باني الجدول الموحّد المستخدم في الطباعة — لا جدول ثانٍ */
+    function renderRows(list) {
       const host2 = host.querySelector('#rv-table-host');
-      const totals = rows.reduce((acc, { s }) => {
-        acc.req += s.totals.required; acc.av += s.totals.available; acc.aw += s.totals.awaiting;
-        acc.ld += s.totals.loaded; acc.rm += s.totals.remaining; return acc;
-      }, { req: 0, av: 0, aw: 0, ld: 0, rm: 0 });
-      host2.innerHTML = `
-        <table class="data-table">
-          <thead><tr>
-            <th>#</th><th>${ar() ? 'العميل' : 'Customer'}</th><th>${ar() ? 'تاريخ الحجز' : 'Date'}</th>
-            <th class="num">${ar() ? 'البكر المطلوبة' : 'Requested'}</th>
-            <th class="num">${ar() ? 'متاح' : 'Available'}</th>
-            <th class="num">${ar() ? 'بانتظار الإنتاج' : 'Awaiting'}</th>
-            <th class="num">${ar() ? 'محمّلة' : 'Loaded'}</th>
-            <th class="num">${ar() ? 'المتبقي' : 'Remaining'}</th>
-            <th>${ar() ? 'الحالة' : 'Status'}</th>
-            <th>${t('actions')}</th>
-          </tr></thead>
-          <tbody>${rows.length ? rows.map(({ r, s }) => `
-            <tr>
-              <td data-label="#">${fmtNum(r.seq)}</td>
-              <td data-label="${ar() ? 'العميل' : 'Customer'}"><button class="voucher-no" data-open="${esc(r.id)}">${esc(r.customer)}</button></td>
-              <td data-label="${ar() ? 'التاريخ' : 'Date'}">${fmtDate(r.date)}</td>
-              <td class="num" data-label="${ar() ? 'المطلوبة' : 'Requested'}">${fmtNum(s.totals.required)}</td>
-              <td class="num pos" data-label="${ar() ? 'متاح' : 'Available'}">${fmtNum(s.totals.available)}</td>
-              <td class="num" data-label="${ar() ? 'بانتظار' : 'Awaiting'}">${fmtNum(s.totals.awaiting)}</td>
-              <td class="num" data-label="${ar() ? 'محمّلة' : 'Loaded'}">${fmtNum(s.totals.loaded)}</td>
-              <td class="num" data-label="${ar() ? 'المتبقي' : 'Remaining'}"><strong>${fmtNum(s.totals.remaining)}</strong></td>
-              <td data-label="${ar() ? 'الحالة' : 'Status'}">${resStatusChip(s.status)}</td>
-              <td class="actions-cell">
-                <button class="icon-btn" data-open="${esc(r.id)}" title="${ar() ? 'تفاصيل الحجز' : 'Details'}">👁</button>
-                <button class="icon-btn" data-trf="${esc(r.id)}" title="${ar() ? 'تحويل كمية لعميل آخر' : 'Transfer'}">⇄</button>
-                ${s.totals.remaining > 0 ? `<button class="icon-btn danger" data-cnl="${esc(r.id)}" title="${ar() ? 'إلغاء كمية/حجز' : 'Cancel'}">🚫</button>` : ''}
-                ${!r.cancelled ? `<button class="icon-btn" data-edit="${esc(r.id)}" title="${t('edit')}">✎</button>` : ''}
-              </td>
-            </tr>`).join('') : `<tr><td colspan="10" class="empty">${ar() ? 'لا توجد حجوزات بعد — ابدأ بـ«حجز جديد»' : 'No reservations yet'}</td></tr>`}</tbody>
-          <tfoot><tr>
-            <td colspan="3">${t('total')} (${fmtNum(rows.length)} ${ar() ? 'حجز' : 'reservations'})</td>
-            <td class="num">${fmtNum(totals.req)}</td>
-            <td class="num">${fmtNum(totals.av)}</td>
-            <td class="num">${fmtNum(totals.aw)}</td>
-            <td class="num">${fmtNum(totals.ld)}</td>
-            <td class="num">${fmtNum(totals.rm)}</td>
-            <td colspan="2"></td>
-          </tr></tfoot>
-        </table>`;
-
+      host2.innerHTML = unifiedTableHtml(list, { actions: true });
       host2.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => { App.pendingReservationId = b.dataset.open; App.navigate('reservation-details'); }));
       host2.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => { App.pendingReservationEdit = b.dataset.edit; App.navigate('reservation-form'); }));
-      host2.querySelectorAll('[data-trf]').forEach((b) => b.addEventListener('click', () => openTransferModal(b.dataset.trf, null, () => rerenderMine())));
-      host2.querySelectorAll('[data-cnl]').forEach((b) => b.addEventListener('click', () => openCancelModal(b.dataset.cnl, null, () => rerenderMine())));
+      host2.querySelectorAll('[data-trf]').forEach((b) => b.addEventListener('click', () => openTransferModal(b.dataset.trf, b.dataset.trfItem || null, () => refreshRows())));
+      host2.querySelectorAll('[data-cnl]').forEach((b) => b.addEventListener('click', () => openCancelModal(b.dataset.cnl, b.dataset.cnlItem || null, () => refreshRows())));
     }
 
     host.querySelector('#rv-q').addEventListener('input', applyFilters);
@@ -494,7 +612,7 @@
     host.querySelector('#rv-clear').addEventListener('click', () => {
       host.querySelector('#rv-q').value = ''; host.querySelector('#rv-status').value = ''; applyFilters();
     });
-    applyFilters();
+    refreshRows();
   }
 
   /* ================= 5) سجل التحويلات العام ================= */
@@ -1488,26 +1606,22 @@
   App.registerView('reservation-form', renderReservationForm);
   App.registerView('reservation-details', renderReservationDetails);
   App.openReservationDetails = (id) => { App.pendingReservationId = id; App.navigate('reservation-details'); };
-  /* Read-only data provider for the combined printable reservation report. */
+  /* Read-only data provider for the combined printable reservation report.
+     (محتفظ به للتوافق — مصدره الآن نفس دالة الكشف الموحّد تمامًا) */
   App.getReservationPrintRows = (reservationIds) => {
     const selected = new Set((reservationIds || []).map(String));
-    const snapshot = computeAll().snapshot;
-    return Store.getAll('reservations')
-      .filter((reservation) => selected.has(String(reservation.id)))
-      .flatMap((reservation) => {
-        const state = snapshot.get(reservation.id);
-        if (!state) return [];
-        return Array.from(state.items.values()).map((st) => ({
-          reservationId: reservation.id,
-          customer: reservation.customer || '',
-          quality: App.productFamily(st.item.quality),
-          gsm: st.item.gsm,
-          size: st.item.size,
-          required: st.required,
-          available: st.available,
-          loaded: st.loaded + st.loadedTransferred,
-        }));
-      });
+    return reservationReportRows(null)
+      .filter((x) => selected.has(String(x.reservationId)))
+      .map((x) => ({
+        reservationId: x.reservationId,
+        customer: x.customer,
+        quality: x.quality,
+        gsm: x.gsm,
+        size: x.size,
+        required: x.qty,
+        available: x.available,
+        loaded: x.loaded,
+      }));
   };
   App.openTransferModal = openTransferModal;
   App.openCancelModal = openCancelModal;
@@ -1526,7 +1640,7 @@
 
   /* Node export for automated tests */
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { KEYS, Store, computeAll, voucherLineKey, uid };
+    module.exports = { KEYS, Store, computeAll, voucherLineKey, uid, reservationReportRows, reservationReportTotals, unifiedTableHtml };
   }
 
 

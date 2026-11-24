@@ -1488,6 +1488,27 @@
   App.registerView('reservation-form', renderReservationForm);
   App.registerView('reservation-details', renderReservationDetails);
   App.openReservationDetails = (id) => { App.pendingReservationId = id; App.navigate('reservation-details'); };
+  /* Read-only data provider for the combined printable reservation report. */
+  App.getReservationPrintRows = (reservationIds) => {
+    const selected = new Set((reservationIds || []).map(String));
+    const snapshot = computeAll().snapshot;
+    return Store.getAll('reservations')
+      .filter((reservation) => selected.has(String(reservation.id)))
+      .flatMap((reservation) => {
+        const state = snapshot.get(reservation.id);
+        if (!state) return [];
+        return Array.from(state.items.values()).map((st) => ({
+          reservationId: reservation.id,
+          customer: reservation.customer || '',
+          quality: App.productFamily(st.item.quality),
+          gsm: st.item.gsm,
+          size: st.item.size,
+          required: st.required,
+          available: st.available,
+          loaded: st.loaded + st.loadedTransferred,
+        }));
+      });
+  };
   App.openTransferModal = openTransferModal;
   App.openCancelModal = openCancelModal;
   App.openLinkModal = openLinkModal;

@@ -3,49 +3,95 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Agrima — إدارة المخزون والرولات والبكر وحجوزات العملاء</title>
-  <meta name="description" content="Agrima: إدارة المخزون والرولات والبكر والإنتاج وأذون الصرف وحجوزات العملاء — رصيد، تسجيل بكر، أذون ضريبية وغير ضريبية، تتبع حجوزات العملاء، تقارير طباعة A4، ونسخ احتياطي — يعمل بدون إنترنت">
-  <meta name="theme-color" content="#134E4A">
+  <title>Agrima ERP — إدارة المخزون والبكر وأذون الصرف</title>
+  <meta name="description" content="Agrima ERP: نظام احترافي لإدارة المخزون والرولات والبكر والإنتاج وأذون الصرف وحجوزات العملاء — صلاحيات مدير النظام وأمين المخزن محفوظة في Supabase وفرضها على مستوى قاعدة البيانات — يعمل أونلاين وأوفلاين">
+  <meta name="theme-color" content="#0F2B4C">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="assets/icons/favicon-64.png" type="image/png">
   <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="css/style.css?v=v9-resv-unified-r1">
-  <link rel="stylesheet" href="css/print.css?v=v9-resv-unified-r1" media="print">
+  <link rel="stylesheet" href="css/style.css?v=v10-erp-r1">
+  <link rel="stylesheet" href="css/print.css?v=v10-erp-r1" media="print">
 </head>
 <body>
   <div id="app" class="app-shell">
 
-    <!-- ===== Sidebar (desktop) ===== -->
+    <!-- ===== Sidebar (desktop) — ERP grouped navigation ===== -->
     <aside class="sidebar" id="sidebar">
       <div class="brand">
         <img src="assets/icons/icon-192.png" alt="" class="brand-ic">
         <div>
-          <div class="brand-name">Agrima</div>
-          <div class="brand-sub">إدارة المخزون والبكر</div>
+          <div class="brand-name">Agrima <span class="brand-badge">ERP</span></div>
+          <div class="brand-sub" id="brand-company">إدارة المخزون والبكر</div>
         </div>
       </div>
       <nav class="side-nav">
-        <a class="nav-item" data-route="dashboard" href="#dashboard"><span class="nav-ic">🏠</span><span class="nav-txt" data-i18n="dashboard">لوحة التحكم</span></a>
-        <a class="nav-item" data-route="inventory" href="#inventory"><span class="nav-ic">📦</span><span class="nav-txt" data-i18n="inventory">الرصيد الحالي</span></a>
-        <a class="nav-item" data-route="reels-add" href="#reels-add"><span class="nav-ic">➕</span><span class="nav-txt" data-i18n="reelsAdd">تسجيل البكر</span></a>
-        <a class="nav-item" data-route="rolls" href="#rolls"><span class="nav-ic">🔄</span><span class="nav-txt" data-i18n="rollsRoute">إدارة الرولات والبكر</span></a>
-        <a class="nav-item" data-route="production" href="#production"><span class="nav-ic">🏭</span><span class="nav-txt" data-i18n="production">سجل الإنتاج</span></a>
-        <a class="nav-item" data-route="issuedocs" href="#issuedocs"><span class="nav-ic">🧾</span><span class="nav-txt" data-i18n="issuedocs">أذون الصرف</span></a>
-        <a class="nav-item" data-route="reservations" href="#reservations"><span class="nav-ic">📋</span><span class="nav-txt" data-i18n="reservations">حجوزات العملاء</span></a>
-        <a class="nav-item" data-route="outlog" href="#outlog"><span class="nav-ic">📤</span><span class="nav-txt" data-i18n="outlog">سجل حركات الصرف</span></a>
-        <a class="nav-item" data-route="customers" href="#customers"><span class="nav-ic">👥</span><span class="nav-txt" data-i18n="customers">العملاء</span></a>
-        <a class="nav-item" data-route="products" href="#products"><span class="nav-ic">🏷</span><span class="nav-txt" data-i18n="products">إدارة الأصناف</span></a>
-        <a class="nav-item" data-route="reports" href="#reports"><span class="nav-ic">🖨</span><span class="nav-txt" data-i18n="reports">التقارير</span></a>
-        <a class="nav-item" data-route="import" href="#import"><span class="nav-ic">📥</span><span class="nav-txt" data-i18n="importExport">الاستيراد والتصدير</span></a>
-        <a class="nav-item" data-route="backup" href="#backup"><span class="nav-ic">💾</span><span class="nav-txt" data-i18n="backup">النسخ الاحتياطي</span></a>
-        <a class="nav-item" data-route="settings" href="#settings"><span class="nav-ic">⚙️</span><span class="nav-txt" data-i18n="settings">الإعدادات</span></a>
+        <div class="nav-group-title">الرئيسية</div>
+        <a class="nav-item" data-route="dashboard" href="#dashboard">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span>
+          <span class="nav-txt" data-i18n="dashboard">لوحة التحكم</span></a>
+        <a class="nav-item" data-route="inventory" href="#inventory">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span>
+          <span class="nav-txt" data-i18n="inventory">الرصيد الحالي</span></a>
+
+        <div class="nav-group-title">العمليات</div>
+        <a class="nav-item" data-route="issuedocs" href="#issuedocs">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg></span>
+          <span class="nav-txt" data-i18n="issuedocs">أذون الصرف</span></a>
+        <a class="nav-item" data-route="reservations" href="#reservations">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/><path d="M9 15l2 2 4-4"/></svg></span>
+          <span class="nav-txt" data-i18n="reservations">حجوزات العملاء</span></a>
+        <a class="nav-item" data-route="outlog" href="#outlog">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span>
+          <span class="nav-txt" data-i18n="outlog">سجل حركات الصرف</span></a>
+        <a class="nav-item" data-route="production" href="#production">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h20"/><path d="M4 20V9l6 4V9l6 4V6h4v14"/></svg></span>
+          <span class="nav-txt" data-i18n="production">سجل الإنتاج</span></a>
+
+        <div class="nav-group-title">الإدخال</div>
+        <a class="nav-item" data-route="reels-add" href="#reels-add">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg></span>
+          <span class="nav-txt" data-i18n="reelsAdd">تسجيل البكر</span></a>
+        <a class="nav-item" data-route="rolls" href="#rolls">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="1.6"/><circle cx="14" cy="12" r="1.6"/><circle cx="9" cy="17" r="1.6"/></svg></span>
+          <span class="nav-txt" data-i18n="rollsRoute">إدارة الرولات والبكر</span></a>
+
+        <div class="nav-group-title">البيانات</div>
+        <a class="nav-item" data-route="customers" href="#customers">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M17.5 13.5a6.5 6.5 0 0 1 4 6.5"/></svg></span>
+          <span class="nav-txt" data-i18n="customers">العملاء</span></a>
+        <a class="nav-item" data-route="products" href="#products">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4L12 22l-8.6-8.6a2 2 0 0 1 0-2.8L10 4h7v7l3.6 3.6a2 2 0 0 1 0 2.8z" transform="rotate(180 12 12)"/><circle cx="15" cy="9" r="1.2"/></svg></span>
+          <span class="nav-txt" data-i18n="products">إدارة الأصناف</span></a>
+
+        <div class="nav-group-title">الإدارة</div>
+        <a class="nav-item" data-route="reports" href="#reports">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/></svg></span>
+          <span class="nav-txt" data-i18n="reports">التقارير</span></a>
+        <a class="nav-item" data-route="import" href="#import">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 9l5-5 5 5"/><path d="M12 4v10"/></svg></span>
+          <span class="nav-txt" data-i18n="importExport">الاستيراد والتصدير</span></a>
+        <a class="nav-item" data-route="backup" href="#backup">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="2.6"/><path d="M4 5v6c0 1.4 3.6 2.6 8 2.6s8-1.2 8-2.6V5"/><path d="M4 11v6c0 1.4 3.6 2.6 8 2.6s8-1.2 8-2.6v-6"/></svg></span>
+          <span class="nav-txt" data-i18n="backup">النسخ الاحتياطي</span></a>
+        <a class="nav-item" data-route="audit" href="#audit">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg></span>
+          <span class="nav-txt">سجل العمليات</span></a>
+        <a class="nav-item" data-route="users" href="#users">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M18 8v6M15 11h6"/></svg></span>
+          <span class="nav-txt">المستخدمون والصلاحيات</span></a>
+        <a class="nav-item" data-route="sync" href="#sync">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5M3 21v-5h5"/></svg></span>
+          <span class="nav-txt">المزامنة والحساب</span></a>
+        <a class="nav-item" data-route="settings" href="#settings">
+          <span class="nav-ic"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg></span>
+          <span class="nav-txt" data-i18n="settings">الإعدادات</span></a>
       </nav>
       <div class="side-foot">
         <div id="net-status" class="net-status"></div>
-        <div class="muted small">Agrima v9</div>
+        <div class="muted small">Agrima ERP v10</div>
       </div>
     </aside>
     <div class="nav-backdrop" id="nav-backdrop"></div>
@@ -54,8 +100,10 @@
     <main class="app-main">
       <header class="topbar">
         <button class="icon-btn nav-burger" id="nav-toggle" aria-label="القائمة">☰</button>
-        <div class="topbar-title" data-i18n="appName">Agrima — إدارة المخزون والبكر</div>
-
+        <div class="topbar-title" data-i18n="appName">Agrima ERP — إدارة المخزون والبكر</div>
+        <div class="topbar-space"></div>
+        <div id="sync-chip" class="sync-chip sync-ok" style="display:none">✓ متصل</div>
+        <div id="topbar-user" class="topbar-user"></div>
       </header>
 
       <section id="view" class="view" aria-live="polite">
@@ -70,11 +118,11 @@
 
       <!-- ===== Bottom nav (mobile) ===== -->
       <nav class="bottom-nav">
-        <a class="nav-item" data-route="dashboard" href="#dashboard"><span class="nav-ic">🏠</span><span class="nav-txt" data-i18n="dashboard">الرئيسية</span></a>
-        <a class="nav-item" data-route="inventory" href="#inventory"><span class="nav-ic">📦</span><span class="nav-txt" data-i18n="inventory">الرصيد</span></a>
-        <a class="nav-item nav-fab" data-route="reels-add" href="#reels-add" aria-label="تسجيل بكر"><span class="nav-ic">＋</span><span class="nav-txt" data-i18n="reelsAdd">تسجيل بكر</span></a>
-        <a class="nav-item" data-route="issuedocs" href="#issuedocs"><span class="nav-ic">🧾</span><span class="nav-txt" data-i18n="issuedocs">أذون الصرف</span></a>
-        <a class="nav-item" data-route="rolls" href="#rolls"><span class="nav-ic">🔄</span><span class="nav-txt" data-i18n="rollsShort">الرولات</span></a>
+        <a class="nav-item" data-route="dashboard" href="#dashboard"><span class="nav-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span><span class="nav-txt" data-i18n="dashboard">الرئيسية</span></a>
+        <a class="nav-item" data-route="inventory" href="#inventory"><span class="nav-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="nav-txt" data-i18n="inventory">الرصيد</span></a>
+        <a class="nav-item nav-fab" data-route="reels-add" href="#reels-add" aria-label="تسجيل بكر"><span class="nav-ic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span><span class="nav-txt" data-i18n="reelsAdd">تسجيل بكر</span></a>
+        <a class="nav-item" data-route="issuedocs" href="#issuedocs"><span class="nav-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg></span><span class="nav-txt" data-i18n="issuedocs">أذون الصرف</span></a>
+        <a class="nav-item" data-route="rolls" href="#rolls"><span class="nav-ic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="8" cy="7" r="1.6"/><circle cx="14" cy="12" r="1.6"/><circle cx="9" cy="17" r="1.6"/></svg></span><span class="nav-txt" data-i18n="rollsShort">الرولات</span></a>
       </nav>
     </main>
   </div>
@@ -88,20 +136,26 @@
   <!-- vendor libraries (local, offline-ready) -->
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="vendor/chart.umd.min.js"></script>
+  <script src="vendor/supabase.js"></script>
 
-  <!-- application modules (order matters) -->
-  <script src="js/calculations.js?v=v9-procurement-r1"></script>
-  <script src="js/database.js?v=v9-procurement-r1"></script>
-  <script src="js/ui.js?v=v9-procurement-r1"></script>
-  <script src="js/transactions.js?v=v9-procurement-r1"></script>
-  <script src="js/excel.js?v=v9-procurement-r1"></script>
-  <script src="js/app.js?v=v9-procurement-r1"></script>
-  <script src="js/rolls.js?v=v9-procurement-r1"></script>
-  <script src="js/inventory.js?v=v9-procurement-r1"></script>
-  <script src="js/issuedocs.js?v=v9-procurement-r1"></script>
-  <script src="js/reservations.js?v=v9-resv-unified-r1"></script>
-  <script src="js/reservations-print.js?v=v9-resv-unified-r1"></script>
-  <script src="js/reports.js?v=v9-procurement-r1"></script>
-  <script src="js/backup.js?v=v9-procurement-r1"></script>
+  <!-- application modules (order matters: layers first, views last) -->
+  <script src="js/calculations.js?v=v10-erp-r1"></script>
+  <script src="js/database.js?v=v10-erp-r1"></script>
+  <script src="js/ui.js?v=v10-erp-r1"></script>
+  <script src="js/supabase.js?v=v10-erp-r1"></script>
+  <script src="js/permissions.js?v=v10-erp-r1"></script>
+  <script src="js/auth.js?v=v10-erp-r1"></script>
+  <script src="js/sync.js?v=v10-erp-r1"></script>
+  <script src="js/transactions.js?v=v10-erp-r1"></script>
+  <script src="js/excel.js?v=v10-erp-r1"></script>
+  <script src="js/app.js?v=v10-erp-r1"></script>
+  <script src="js/rolls.js?v=v10-erp-r1"></script>
+  <script src="js/inventory.js?v=v10-erp-r1"></script>
+  <script src="js/issuedocs.js?v=v10-erp-r1"></script>
+  <script src="js/reservations.js?v=v10-erp-r1"></script>
+  <script src="js/reservations-print.js?v=v10-erp-r1"></script>
+  <script src="js/reports.js?v=v10-erp-r1"></script>
+  <script src="js/backup.js?v=v10-erp-r1"></script>
+  <script src="js/users.js?v=v10-erp-r1"></script>
 </body>
 </html>

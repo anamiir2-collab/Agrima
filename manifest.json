@@ -35,6 +35,6 @@
       "short_name": "حجوزات العملاء",
       "url": "./index.html#reservations",
       "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }]
-    },
+    }
   ]
 }

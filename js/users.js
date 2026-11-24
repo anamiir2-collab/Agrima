@@ -203,10 +203,9 @@
     await load();
   }
 
-  /* ---------------- إضافة مستخدم (بلا أي مفاتيح سرية) ----------------
-     المسار: المدير الحالي يُنشئ الحساب عبر Auth API بالمفتاح المنشور،
-     ثم يعيد الجلسة للمدير فورًا، ثم يحدد الدور في profiles — كل ذلك
-     محمي بسياسات RLS (المدير فقط يملك حق إدارة profiles). */
+  /* ---------------- إضافة مستخدم عبر Edge Function آمنة ----------------
+     لا يتم إنشاء الحساب من المتصفح؛ المفتاح الإداري محفوظ داخل Supabase فقط.
+     Edge Function تتحقق من جلسة مدير النظام وتؤكد البريد تلقائيًا. */
   async function addUser(done) {
     const sb = SB.client();
     const node = el(`<div class="edit-tx-form">
@@ -237,55 +236,56 @@
       const errBox = node.querySelector('#nu-err');
       errBox.textContent = '';
       const fullName = node.querySelector('#nu-name').value.trim();
-      const email = node.querySelector('#nu-email').value.trim();
+      const email = node.querySelector('#nu-email').value.trim().toLowerCase();
       const role = node.querySelector('#nu-role').value;
       const password = node.querySelector('#nu-pass').value;
-      if (!email || !email.includes('@')) { errBox.textContent = 'أدخل بريدًا صحيحًا'; return; }
+      if (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) { errBox.textContent = 'أدخل بريدًا إلكترونيًا صحيحًا'; return; }
       if (password.length < 8) { errBox.textContent = 'كلمة المرور 8 أحرف على الأقل'; return; }
       const btn = node.querySelector('#nu-save');
-      btn.disabled = true; btn.textContent = 'جارٍ الإنشاء…';
+      btn.disabled = true; btn.textContent = 'جارٍ إنشاء الحساب وتأكيد البريد…';
       try {
-        /* 1) احفظ جلسة المدير الحالية */
-        const { data: sessData } = await sb.auth.getSession();
-        const adminSession = sessData && sessData.session;
-        /* 2) أنشئ الحساب (يربطه النظام تلقائيًا بملف شخصي بلا دور) */
-        const { data: created, error: upErr } = await sb.auth.signUp({ email, password });
-        if (upErr) throw upErr;
-        const userId = created && created.user ? created.user.id : null;
-        if (!userId) throw new Error('لم يُنشأ الحساب — تحقق من إعدادات البريد في لوحة Supabase');
-        /* 3) أعد جلسة المدير فورًا (signUp يبدّل الجلسة) */
-        if (adminSession) await sb.auth.setSession({ access_token: adminSession.access_token, refresh_token: adminSession.refresh_token });
-        /* 4) حدد الاسم والدور — ممنوع لأي مستخدم آخر (RLS) */
-        const { error: profErr } = await sb.from('profiles').upsert({
-          id: userId, email, full_name: fullName, role, active: true,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' });
-        if (profErr) throw profErr;
-        try { await sb.from('user_roles').insert({ user_id: userId, role, prev_role: null, changed_by: PERM.state.userId }); } catch (e2) { /* تاريخي */ }
-        await logAction('user-create', 'user', userId, `إنشاء حساب ${email} بدور ${role === 'admin' ? 'مدير نظام' : 'أمين مخزن'}`);
+        const { data: sessionData } = await sb.auth.getSession();
+        const accessToken = sessionData && sessionData.session && sessionData.session.access_token;
+        if (!accessToken) throw new Error('انتهت جلسة المدير — سجّل الدخول مرة أخرى');
+        const { data, error } = await sb.functions.invoke('admin-create-user', {
+          body: { email, password, full_name: fullName, role },
+          headers: { Authorization: 'Bearer ' + accessToken },
+        });
+        if (error) {
+          let detail = error.message || 'تعذر إنشاء الحساب';
+          try {
+            const context = error.context;
+            if (context && typeof context.json === 'function') {
+              const body = await context.json();
+              if (body && body.error) detail = body.error;
+            }
+          } catch (ignored) { /* use original message */ }
+          throw new Error(detail);
+        }
+        if (!data || !data.user || !data.user.id) throw new Error('لم تُرجع الخدمة بيانات الحساب — راجع سجلات Edge Function');
+        await logAction('user-create', 'user', data.user.id, `إنشاء حساب ${email} بدور ${role === 'admin' ? 'مدير نظام' : 'أمين مخزن'} مع تأكيد البريد تلقائيًا`);
         closeModal();
-        /* 5) اعرض بيانات الدخول مرة واحدة */
         openModal(el(`<div>
-          <p><strong>تم إنشاء الحساب بنجاح.</strong> انسخ بيانات الدخول الآن — لن تُعرض مرة أخرى:</p>
+          <p><strong>تم إنشاء الحساب وتأكيد البريد الإلكتروني بنجاح.</strong></p>
+          <p>يمكن للمستخدم تسجيل الدخول فورًا دون فتح البريد الإلكتروني.</p>
           <div class="confirm-extra" dir="ltr" style="font-family:monospace">
             ${esc(email)}<br>${esc(password)}
           </div>
           <div class="confirm-actions">
-            <button class="btn btn-primary" id="nu-done">تم النسخ</button>
+            <button class="btn btn-primary" id="nu-copy">نسخ بيانات الدخول</button>
+            <button class="btn btn-ghost" id="nu-done">إغلاق</button>
           </div></div>`), { title: 'بيانات الدخول' });
+        document.querySelector('#nu-copy').addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(email + '\\n' + password);
+            toast('تم نسخ بيانات الدخول', 'ok');
+          } catch (e) { toast('تعذر النسخ — انسخ البيانات يدويًا', 'err'); }
+        });
         document.querySelector('#nu-done').addEventListener('click', closeModal);
         done && done();
       } catch (e) {
         errBox.textContent = SB.humanError(e);
         btn.disabled = false; btn.textContent = 'إنشاء الحساب';
-        /* استعادة جلسة المدير إن فشل شيء بعد signUp */
-        try {
-          const { data: s2 } = await sb.auth.getSession();
-          if (s2 && s2.session && s2.session.user && s2.session.user.email !== PERM.state.email) {
-            const { data: s3 } = await sb.auth.getSession();
-            void s3;
-          }
-        } catch (e2) { /* noop */ }
       }
     });
     openModal(node, { title: 'مستخدم جديد' });

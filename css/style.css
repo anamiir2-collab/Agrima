@@ -700,6 +700,42 @@ body.modal-open { overflow: hidden; }
 .resv-stats-sm .stat-label { font-size: .72rem; }
 .stat-card.accent-red .stat-icon { background: var(--red-50); color: var(--danger); border-color: #F3C9C9; }
 
+/* الكشف الموحّد لحجوزات العملاء — نفس الجدول للشاشة والطباعة */
+/* ترويسة الكشف والتوقيعات على الشاشة مخفية — تظهر في الطباعة فقط (css/print.css) */
+.resv-print-heading, .resv-print-signatures { display: none; }
+.resv-report-card { break-inside: auto; page-break-inside: auto; }
+.resv-unified-table td.resv-cust { font-weight: 600; }
+.resv-unified-table th, .resv-unified-table td { text-align: center; }
+.resv-unified-table td.resv-cust { text-align: start; }
+/* الجوال: تمرير أفقي حقيقي للجدول — الأعمدة السبعة بترتيبها دون حذف أو
+   تحويل صفوف إلى بطاقات، والعمود الإضافي (الإجراءات) يبقى آخر الجدول */
+@media (max-width: 639.5px) {
+  .resv-unified-table { min-width: 640px; font-size: .8rem; }
+  .resv-unified-table thead { display: table-header-group; }
+  .resv-unified-table thead th { display: table-cell; padding: .4rem .45rem; }
+  .resv-unified-table tbody tr {
+    display: table-row; border: none; border-radius: 0; margin: 0; padding: 0;
+    background: transparent; overflow: visible; position: static;
+  }
+  .resv-unified-table tbody tr::before { content: none; }
+  .resv-unified-table tbody td {
+    display: table-cell; justify-content: initial; gap: 0;
+    border-bottom: 1px solid var(--line); padding: .4rem .45rem; white-space: nowrap;
+  }
+  .resv-unified-table tbody td:last-child { border-bottom: 1px solid var(--line); }
+  .resv-unified-table tbody td::before { content: none !important; }
+  .resv-unified-table tfoot { display: table-row-group; }
+  .resv-unified-table tfoot tr {
+    display: table-row; background: var(--gold-soft);
+    border: none; border-radius: 0; padding: 0; margin: 0;
+  }
+  .resv-unified-table tfoot td {
+    display: table-cell; justify-content: initial;
+    padding: .4rem .45rem; background: var(--gold-soft); border-bottom: none;
+  }
+  .resv-unified-table tfoot td::before { content: none; }
+}
+
 /* شارات الحالة — شارة واحدة هادئة لكل حالة */
 .resv-chip {
   display: inline-block; padding: .14rem .55rem; border-radius: 999px;

@@ -91,7 +91,9 @@
 
 
 /* =========================================================================
-   طباعة حجوزات العملاء — كشف القائمة ومستند تفاصيل الحجز
+   طباعة حجوزات العملاء — الجدول الموحّد نفسه المعروض على الشاشة
+   (نفس العنصر ونفس البيانات ونفس الحسابات — الفرق الوحيد: إخفاء أدوات
+   التحكم + تنسيق الورقة A4. لا جدول طباعة منفصل ولا ترويسة مكرّرة)
    ========================================================================= */
 .resv-print-heading, .resv-print-signatures { display: none; }
 
@@ -106,21 +108,63 @@
     page-break-after: avoid;
     break-after: avoid;
   }
-  .resv-print-company { font-size: 16px; font-weight: 800; }
-  .resv-print-title { font-size: 18px; font-weight: 800; margin-top: 5px; }
-  .resv-print-date { font-size: 10px; margin-top: 5px; color: #333; }
-  .resv-print-btn, .actions-cell, .resv-item-actions,
-  [data-trf], [data-link], [data-cnl], [data-unlink], [data-ctrf] {
+  .resv-print-company { font-size: 15px; font-weight: 800; }
+  .resv-print-title { font-size: 17px; font-weight: 800; margin-top: 4px; }
+  .resv-print-date { font-size: 10px; margin-top: 4px; color: #333; }
+
+  /* إخفاء كل أدوات التحكم — يبقى: الترويسة + الجدول الموحّد + التوقيعات */
+  .resv-print-btn, .resv-multi-print-btn, .actions-cell, .resv-item-actions,
+  .resv-notice, .resv-stats, .card.filters, .page-head, .head-actions,
+  .btn-row, .form-actions,
+  [data-trf], [data-link], [data-cnl], [data-unlink], [data-ctrf], [data-edit] {
     display: none !important;
   }
+
+  /* ===== الجدول الموحّد: 7 أعمدة بالضبط (عمود الإجراءات يُخفى) ===== */
+  .resv-unified-table { font-size: 10px !important; }
+  .resv-unified-table .resv-actions-col,
+  .resv-unified-table td.actions-cell { display: none !important; }
+  .resv-unified-table th, .resv-unified-table td {
+    border: 1px solid #555 !important;
+    padding: 5px 6px !important;
+    text-align: center !important;
+    color: #000 !important;
+    background: #fff !important;
+    font-size: 10px !important;
+    white-space: nowrap;
+  }
+  .resv-unified-table thead { display: table-header-group !important; } /* تكرار الترويسة أعلى كل صفحة */
+  .resv-unified-table thead th {
+    background: #eee !important;
+    font-weight: 800 !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  /* الإجماليات مرة واحدة في نهاية الكشف فقط — لا تكرار في كل صفحة */
+  .resv-unified-table tfoot { display: table-row-group !important; }
+  .resv-unified-table tfoot td {
+    background: #f3f3f3 !important;
+    font-weight: 800 !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .resv-unified-table tbody tr, .resv-unified-table tfoot tr {
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  .resv-unified-table td.resv-cust { font-weight: 700; }
+  .resv-unified-table button.voucher-no {
+    padding: 0 !important; border: 0 !important;
+    color: #000 !important; background: transparent !important; font-weight: 700 !important;
+  }
+
+  /* التوقيعات مرة واحدة في نهاية الكشف فقط — دون صفحة فارغة بعدها */
   .resv-print-signatures {
     display: flex !important;
     justify-content: space-between;
     gap: 12mm;
-    margin-top: 18mm;
+    margin-top: 14mm;
     padding-top: 5mm;
     page-break-inside: avoid;
     break-inside: avoid;
+    page-break-before: auto;
     color: #000 !important;
   }
   .resv-print-sign {
@@ -166,45 +210,26 @@
     background: transparent !important;
     font-weight: 700 !important;
   }
-  .resv-stats { grid-template-columns: repeat(3, 1fr) !important; }
   .resv-stats-sm { grid-template-columns: repeat(3, 1fr) !important; }
   .view > .card { break-inside: auto; }
-  .resv-items-table tr, .resv-print-signatures { page-break-inside: avoid; break-inside: avoid; }
+  .resv-items-table tr { page-break-inside: avoid; break-inside: avoid; }
 }
 
-
-/* Combined customer reservation print report and selection dialog */
+/* مربع اختيار العملاء للطباعة (شاشة فقط) */
 .resv-print-picker-overlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.55); }
 .resv-print-picker { width: min(560px, 100%); max-height: 85vh; overflow: auto; background: #fff; color: #17202a; border-radius: 14px; padding: 18px; direction: rtl; box-shadow: 0 16px 50px rgba(0,0,0,.25); }
-.resv-print-picker h3 { margin: 0 0 14px; }
+.resv-print-picker h3 { margin: 0 0 6px; }
+.resv-print-picker .resv-print-picker-sub { margin: 0 0 10px; color: #64748b; font-size: .82rem; }
 .resv-print-picker-actions, .resv-print-picker-footer { display: flex; gap: 8px; justify-content: space-between; margin: 10px 0; }
 .resv-print-picker button { border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 8px; padding: 9px 13px; cursor: pointer; }
 .resv-print-picker button.primary { background: #134e4a; color: #fff; border-color: #134e4a; }
 .resv-print-picker-list { display: grid; gap: 7px; max-height: 48vh; overflow: auto; border-block: 1px solid #e5e7eb; padding: 10px 0; }
-.resv-print-picker-list label { display: flex; align-items: center; gap: 9px; padding: 7px; border: 1px solid #e5e7eb; border-radius: 8px; }
+.resv-print-picker-list label { display: flex; align-items: center; gap: 9px; padding: 7px; border: 1px solid #e5e7eb; border-radius: 8px; cursor: pointer; }
 .resv-print-picker-list label span { font-weight: 700; }
 .resv-print-picker-list label small { margin-inline-start: auto; color: #64748b; }
-#resv-multi-print { display: none; }
-@media print {
-  body:has(#resv-multi-print) > *:not(#resv-multi-print) { display: none !important; }
-  body:has(#resv-multi-print) #resv-multi-print { display: block !important; }
-  #resv-multi-print { direction: rtl; color: #000; background: #fff; font-size: 11px; }
-  #resv-multi-print header { text-align: center; margin-bottom: 12mm; border-bottom: 2px solid #222; padding-bottom: 6mm; }
-  #resv-multi-print .resv-multi-company { font-size: 16px; font-weight: 800; }
-  #resv-multi-print h1 { font-size: 19px; margin: 5px 0; }
-  #resv-multi-print table { width: 100%; border-collapse: collapse; }
-  #resv-multi-print th, #resv-multi-print td { border: 1px solid #555; padding: 7px 6px; text-align: center; color: #000; }
-  #resv-multi-print thead { display: table-header-group; }
-  #resv-multi-print thead th { background: #eee !important; print-color-adjust: exact; }
-  #resv-multi-print tfoot th { background: #eee !important; print-color-adjust: exact; }
-  #resv-multi-print tr { break-inside: avoid; page-break-inside: avoid; }
-  #resv-multi-print .resv-multi-signatures { display: flex; justify-content: space-around; gap: 20mm; margin-top: 22mm; break-inside: avoid; }
-  #resv-multi-print .resv-multi-signatures div { flex: 1; text-align: center; }
-  #resv-multi-print .resv-multi-signatures span { display: block; height: 18mm; border-bottom: 1px dotted #333; }
-  @page { size: A4 portrait; margin: 12mm; }
-}
+@media print { .resv-print-picker-overlay { display: none !important; } }
 
-/* Reservation list print: hide the explanatory banner and dashboard summary cards */
+/* القائمة والتفاصيل: إخفاء لافتة الشرح وبطاقات الإحصاء عند الطباعة */
 @media print {
   .resv-notice,
   .resv-stats {

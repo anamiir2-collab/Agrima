@@ -37,7 +37,7 @@
 
     if (!view.querySelector('.resv-print-heading')) {
       const title = global.document.createElement('div');
-      title.className = 'resv-print-heading';
+      title.className = 'resv-print-heading';\n      title.style.display = 'none';
       const isDetail = route === 'reservation-details';
       const heading = head.querySelector('h2');
       title.innerHTML = '<div class="resv-print-company">' + labels.company + '</div>' +
@@ -49,7 +49,7 @@
 
     if (route === 'reservation-details' && !view.querySelector('.resv-print-signatures')) {
       const sign = global.document.createElement('div');
-      sign.className = 'resv-print-signatures';
+      sign.className = 'resv-print-signatures';\n      sign.style.display = 'none';
       sign.innerHTML = labels.signatures.map((name) => '<div class="resv-print-sign"><strong>' + name + '</strong><span></span></div>').join('');
       view.appendChild(sign);
     }

@@ -7,8 +7,8 @@
   'use strict';
 
   const LABELS = {
-    ar: { print: 'طباعة', multi: 'طباعة كشف مجمّع', choose: 'اختيار الحجوزات للطباعة', all: 'تحديد الكل', none: 'إلغاء التحديد', run: 'طباعة المحدد', cancel: 'إلغاء', company: 'شركة اجريماسترز للاستثمار والتنمية الزراعية', report: 'كشف حجوزات البكر للعملاء', date: 'تاريخ الطباعة', customer: 'اسم العميل', size: 'المقاس', gsm: 'الجرام', qty: 'الكمية', weight: 'الوزن التقريبي (كجم)', totalQty: 'إجمالي الكمية', totalWeight: 'إجمالي الوزن التقريبي', signatures: ['المسؤول', 'أمين المخزن'] },
-    en: { print: 'Print', multi: 'Print combined report', choose: 'Select reservations to print', all: 'Select all', none: 'Clear selection', run: 'Print selected', cancel: 'Cancel', company: 'Agrima Company', report: 'Customer Reel Reservations Report', date: 'Printed on', customer: 'Customer', size: 'Size', gsm: 'GSM', qty: 'Quantity', weight: 'Estimated weight (kg)', totalQty: 'Total quantity', totalWeight: 'Total estimated weight', signatures: ['Manager', 'Storekeeper'] }
+    ar: { print: 'طباعة', multi: 'طباعة كشف مجمّع', choose: 'اختيار الحجوزات للطباعة', all: 'تحديد الكل', none: 'إلغاء التحديد', run: 'طباعة المحدد', cancel: 'إلغاء', company: 'شركة اجريماسترز للاستثمار والتنمية الزراعية', report: 'كشف حجوزات البكر للعملاء', date: 'تاريخ الطباعة', customer: 'اسم العميل', type: 'النوع', size: 'المقاس', gsm: 'الجرام', qty: 'عدد البكر', available: 'المتاح', loaded: 'المحمّل', totalQty: 'إجمالي البكر', totalAvailable: 'إجمالي المتاح', totalLoaded: 'إجمالي المحمّل', signatures: ['المسؤول', 'أمين المخزن'] },
+    en: { print: 'Print', multi: 'Print combined report', choose: 'Select reservations to print', all: 'Select all', none: 'Clear selection', run: 'Print selected', cancel: 'Cancel', company: 'Agrima Company', report: 'Customer Reel Reservations Report', date: 'Printed on', customer: 'Customer', type: 'Type', size: 'Size', gsm: 'GSM', qty: 'Reel count', available: 'Available', loaded: 'Loaded', totalQty: 'Total reels', totalAvailable: 'Total available', totalLoaded: 'Total loaded', signatures: ['Manager', 'Storekeeper'] }
   };
 
   const ar = () => !global.UI || typeof global.UI.getLang !== 'function' || global.UI.getLang() === 'ar';
@@ -65,26 +65,38 @@
 
   function printCombined(reservations) {
     const labels = ar() ? LABELS.ar : LABELS.en;
-    const rows = [];
-    let totalQty = 0, totalWeight = 0;
-    reservations.forEach((reservation) => {
-      (reservation.items || []).forEach((item) => {
-        const qty = Number(item.qtyRequired) || 0;
-        const weight = estimateWeight(item);
-        totalQty += qty; totalWeight += weight;
-        rows.push('<tr><td>' + esc(reservation.customer || '—') + '</td><td>' + esc(item.size) +
-          '</td><td>' + esc(item.gsm) + '</td><td>' + number(qty, 0) +
-          '</td><td>' + number(weight, 2) + '</td></tr>');
-      });
+    const app = global.App;
+    if (!app || typeof app.getReservationPrintRows !== 'function') {
+      global.alert(ar() ? 'تعذر تجهيز بيانات الكشف. حدّث التطبيق وحاول مرة أخرى.' : 'Could not prepare report data. Refresh and try again.');
+      return;
+    }
+    const rowsData = app.getReservationPrintRows(reservations.map((r) => r.id));
+    if (!rowsData.length) {
+      global.alert(ar() ? 'لا توجد بنود في الحجوزات المحددة.' : 'No reservation items in the selected records.');
+      return;
+    }
+    let totalQty = 0, totalAvailable = 0, totalLoaded = 0;
+    const rows = rowsData.map((item) => {
+      const qty = Number(item.required) || 0;
+      const available = Number(item.available) || 0;
+      const loaded = Number(item.loaded) || 0;
+      totalQty += qty;
+      totalAvailable += available;
+      totalLoaded += loaded;
+      return '<tr><td>' + esc(item.customer || '—') + '</td><td>' + esc(item.quality || '—') +
+        '</td><td>' + esc(item.gsm) + '</td><td>' + esc(item.size) +
+        '</td><td>' + number(qty, 0) + '</td><td>' + number(available, 0) +
+        '</td><td>' + number(loaded, 0) + '</td></tr>';
     });
     const report = global.document.createElement('section');
     report.id = 'resv-multi-print';
     report.innerHTML = '<header><div class="resv-multi-company">' + labels.company + '</div><h1>' + labels.report +
       '</h1><div>' + labels.date + ': ' + dateText() + '</div></header>' +
-      '<table><thead><tr><th>' + labels.customer + '</th><th>' + labels.size + '</th><th>' + labels.gsm +
-      '</th><th>' + labels.qty + '</th><th>' + labels.weight + '</th></tr></thead><tbody>' + rows.join('') +
-      '</tbody><tfoot><tr><th colspan="3">' + labels.totalQty + '</th><th>' + number(totalQty, 0) +
-      '</th><th>' + number(totalWeight, 2) + '</th></tr></tfoot></table>' +
+      '<table><thead><tr><th>' + labels.customer + '</th><th>' + labels.type + '</th><th>' + labels.gsm +
+      '</th><th>' + labels.size + '</th><th>' + labels.qty + '</th><th>' + labels.available +
+      '</th><th>' + labels.loaded + '</th></tr></thead><tbody>' + rows.join('') +
+      '</tbody><tfoot><tr><th colspan="4">' + labels.totalQty + '</th><th>' + number(totalQty, 0) +
+      '</th><th>' + number(totalAvailable, 0) + '</th><th>' + number(totalLoaded, 0) + '</th></tr></tfoot></table>' +
       '<div class="resv-multi-signatures">' + labels.signatures.map((x) => '<div>' + x + '<span></span></div>').join('') + '</div>';
     global.document.body.appendChild(report);
     const cleanup = () => { if (report.parentNode) report.remove(); global.removeEventListener('afterprint', cleanup); };

@@ -88,3 +88,86 @@
 .doc-draft .rp-title { color: #000 !important; }
 .rp-est { font-weight: 700; }
 .doc-issue-table th, .doc-issue-table td { padding: 4px 8px !important; }
+
+
+/* =========================================================================
+   طباعة حجوزات العملاء — كشف القائمة ومستند تفاصيل الحجز
+   ========================================================================= */
+.resv-print-heading, .resv-print-signatures { display: none; }
+
+@media print {
+  .resv-print-heading {
+    display: block !important;
+    text-align: center;
+    color: #000 !important;
+    border-bottom: 2px solid #222;
+    padding: 0 0 8px;
+    margin: 0 0 12px;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  .resv-print-company { font-size: 16px; font-weight: 800; }
+  .resv-print-title { font-size: 18px; font-weight: 800; margin-top: 5px; }
+  .resv-print-date { font-size: 10px; margin-top: 5px; color: #333; }
+  .resv-print-btn, .actions-cell, .resv-item-actions,
+  [data-trf], [data-link], [data-cnl], [data-unlink], [data-ctrf] {
+    display: none !important;
+  }
+  .resv-print-signatures {
+    display: flex !important;
+    justify-content: space-between;
+    gap: 12mm;
+    margin-top: 18mm;
+    padding-top: 5mm;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    color: #000 !important;
+  }
+  .resv-print-sign {
+    flex: 1;
+    text-align: center;
+    font-size: 11px;
+  }
+  .resv-print-sign span {
+    display: block;
+    height: 18mm;
+    border-bottom: 1px dotted #444;
+    margin-top: 3mm;
+  }
+  .resv-meta-grid, .stats-grid { break-inside: avoid; page-break-inside: avoid; }
+  .resv-meta, .stat-card, .card {
+    box-shadow: none !important;
+    border-color: #999 !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .resv-chip, .badge {
+    border: 1px solid #888 !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .table-wrap { overflow: visible !important; }
+  .data-table { width: 100% !important; min-width: 0 !important; border-collapse: collapse !important; }
+  .data-table thead { display: table-header-group !important; }
+  .data-table tbody tr { display: table-row !important; }
+  .data-table tbody td, .data-table th {
+    display: table-cell !important;
+    border: 1px solid #777 !important;
+    padding: 4px 5px !important;
+    color: #000 !important;
+    background: #fff !important;
+    font-size: 9px !important;
+  }
+  .data-table tbody td::before { display: none !important; content: none !important; }
+  .data-table button.voucher-no {
+    padding: 0 !important;
+    border: 0 !important;
+    color: #000 !important;
+    background: transparent !important;
+    font-weight: 700 !important;
+  }
+  .resv-stats { grid-template-columns: repeat(3, 1fr) !important; }
+  .resv-stats-sm { grid-template-columns: repeat(3, 1fr) !important; }
+  .view > .card { break-inside: auto; }
+  .resv-items-table tr, .resv-print-signatures { page-break-inside: avoid; break-inside: avoid; }
+}

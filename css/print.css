@@ -203,3 +203,11 @@
   #resv-multi-print .resv-multi-signatures span { display: block; height: 18mm; border-bottom: 1px dotted #333; }
   @page { size: A4 portrait; margin: 12mm; }
 }
+
+/* Reservation list print: hide the explanatory banner and dashboard summary cards */
+@media print {
+  .resv-notice,
+  .resv-stats {
+    display: none !important;
+  }
+}

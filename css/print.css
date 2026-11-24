@@ -171,3 +171,35 @@
   .view > .card { break-inside: auto; }
   .resv-items-table tr, .resv-print-signatures { page-break-inside: avoid; break-inside: avoid; }
 }
+
+
+/* Combined customer reservation print report and selection dialog */
+.resv-print-picker-overlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.55); }
+.resv-print-picker { width: min(560px, 100%); max-height: 85vh; overflow: auto; background: #fff; color: #17202a; border-radius: 14px; padding: 18px; direction: rtl; box-shadow: 0 16px 50px rgba(0,0,0,.25); }
+.resv-print-picker h3 { margin: 0 0 14px; }
+.resv-print-picker-actions, .resv-print-picker-footer { display: flex; gap: 8px; justify-content: space-between; margin: 10px 0; }
+.resv-print-picker button { border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 8px; padding: 9px 13px; cursor: pointer; }
+.resv-print-picker button.primary { background: #134e4a; color: #fff; border-color: #134e4a; }
+.resv-print-picker-list { display: grid; gap: 7px; max-height: 48vh; overflow: auto; border-block: 1px solid #e5e7eb; padding: 10px 0; }
+.resv-print-picker-list label { display: flex; align-items: center; gap: 9px; padding: 7px; border: 1px solid #e5e7eb; border-radius: 8px; }
+.resv-print-picker-list label span { font-weight: 700; }
+.resv-print-picker-list label small { margin-inline-start: auto; color: #64748b; }
+#resv-multi-print { display: none; }
+@media print {
+  body:has(#resv-multi-print) > *:not(#resv-multi-print) { display: none !important; }
+  body:has(#resv-multi-print) #resv-multi-print { display: block !important; }
+  #resv-multi-print { direction: rtl; color: #000; background: #fff; font-size: 11px; }
+  #resv-multi-print header { text-align: center; margin-bottom: 12mm; border-bottom: 2px solid #222; padding-bottom: 6mm; }
+  #resv-multi-print .resv-multi-company { font-size: 16px; font-weight: 800; }
+  #resv-multi-print h1 { font-size: 19px; margin: 5px 0; }
+  #resv-multi-print table { width: 100%; border-collapse: collapse; }
+  #resv-multi-print th, #resv-multi-print td { border: 1px solid #555; padding: 7px 6px; text-align: center; color: #000; }
+  #resv-multi-print thead { display: table-header-group; }
+  #resv-multi-print thead th { background: #eee !important; print-color-adjust: exact; }
+  #resv-multi-print tfoot th { background: #eee !important; print-color-adjust: exact; }
+  #resv-multi-print tr { break-inside: avoid; page-break-inside: avoid; }
+  #resv-multi-print .resv-multi-signatures { display: flex; justify-content: space-around; gap: 20mm; margin-top: 22mm; break-inside: avoid; }
+  #resv-multi-print .resv-multi-signatures div { flex: 1; text-align: center; }
+  #resv-multi-print .resv-multi-signatures span { display: block; height: 18mm; border-bottom: 1px dotted #333; }
+  @page { size: A4 portrait; margin: 12mm; }
+}

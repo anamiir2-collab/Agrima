@@ -379,7 +379,7 @@
       g.onsuccess = () => {
         if (!g.result) {
           prodStore.add({ quality: r.quality, gsm: r.gsm, size: r.size, combo,
-            source: 'manual', createdAt: new Date().toISOString() });
+            source: 'manual', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         }
       };
     }
@@ -731,7 +731,7 @@
       source: 'reels',
       fingerprint: ['reel', roll.rollNo, reel.reelNo, reel.id].join('||'),
       createdAt: new Date().toISOString(),
-      updatedAt: null,
+      updatedAt: new Date().toISOString(),
     };
   }
 
@@ -786,7 +786,7 @@
             notes: cleanStr(payload.notes || ''),
             source: 'reels',
             createdAt: new Date().toISOString(),
-            updatedAt: null,
+            updatedAt: new Date().toISOString(),
           };
           const addReq = rollStore.add(roll); /* unique rollNo index guards duplicates */
           addReq.onsuccess = () => { roll.id = addReq.result; };
@@ -808,7 +808,7 @@
               rollReel: assignedNo + '|' + parseInt(String(r.reelNo), 10),
               source: 'reels',
               createdAt: new Date().toISOString(),
-              updatedAt: null,
+              updatedAt: new Date().toISOString(),
             };
             reelStore.add(reel);
             createdReelIds.push(reel.id);
@@ -898,7 +898,7 @@
                 const pg = prodStore.index('combo').get(combo);
                 pg.onsuccess = () => {
                   if (!pg.result) prodStore.add({ quality: merged.quality, gsm: toNumberOrRaw(merged.gram),
-                    size: toNumberOrRaw(merged.size), combo, source: 'reels', createdAt: new Date().toISOString() });
+                    size: toNumberOrRaw(merged.size), combo, source: 'reels', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
                 };
               }
             };
@@ -1004,7 +1004,7 @@
         notes: '',
         source: 'excel',
         createdAt: new Date().toISOString(),
-        updatedAt: null,
+        updatedAt: new Date().toISOString(),
       });
       for (const r of roll.reels || []) {
         reelRows.push({
@@ -1020,7 +1020,7 @@
           rollReel: Number(roll.rollNo) + '|' + parseInt(String(r.reelNo), 10),
           source: 'excel',
           createdAt: new Date().toISOString(),
-          updatedAt: null,
+          updatedAt: new Date().toISOString(),
         });
       }
     }
@@ -1091,7 +1091,7 @@
         source: permit.source || 'permit',
         fingerprint: null,
         createdAt: new Date().toISOString(),
-        updatedAt: null,
+        updatedAt: new Date().toISOString(),
       });
     }
     return rows;

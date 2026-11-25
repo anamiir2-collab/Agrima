@@ -48,6 +48,7 @@
         combo,
         source: source || 'manual',
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
       return global.DB.add('products', p).then((id) => Object.assign(p, { id }));
     });
@@ -97,7 +98,7 @@
       excelRow: t.excelRow ?? null,
       fingerprint: fingerprint(t),
       createdAt: new Date().toISOString(),
-      updatedAt: null,
+      updatedAt: new Date().toISOString(),
     };
     return global.DB.add('transactions', row)
       .then((id) => Promise.all([
@@ -173,7 +174,8 @@
       source: t.source || 'manual',
       excelRow: t.excelRow ?? null,
       fingerprint: fingerprint(t),
-      updatedAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
   }
 
@@ -210,7 +212,7 @@
           g.onsuccess = () => {
             if (!g.result) {
               prodStore.add({ quality: r.quality, gsm: r.gsm, size: r.size, combo,
-                source: 'manual', createdAt: new Date().toISOString() });
+                source: 'manual', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
             }
           };
         });
@@ -1303,6 +1305,7 @@
       groupId: null,
       source: input.source || 'permit',
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       approvedAt: null,
     };
     const errors = validatePermit(permit);

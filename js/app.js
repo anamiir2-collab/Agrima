@@ -135,8 +135,20 @@
     App.state.products = products;
     App.state.transactions = transactions;
     App.state.permits = permits;
-    App.state.balances = global.CALC.computeBalances(transactions);
-    App.state.balancesW = global.CALC.computeBalancesByWeight(transactions);
+    /* أمين المخزن: لا يملك السجلات الخام — رصيده يأتي تجميديًا من السحابة
+       عبر app_stock_balances (محفوظ في stockview بعد كل مزامنة). حركات
+       النافذة المسحوبة تُعرض في سجل الصرف كما هي دون أن تدخل حساب الرصيد. */
+    if (global.PERM && global.PERM.isWarehouse()) {
+      const sv = await global.DB.getAll('stockview');
+      App.state.balances = new Map(sv.map((r) => [r.key, {
+        quality: r.quality, gsm: r.gsm, size: r.size,
+        add: r.add, out: r.out, net: r.net,
+      }]));
+      App.state.balancesW = new Map();
+    } else {
+      App.state.balances = global.CALC.computeBalances(transactions);
+      App.state.balancesW = global.CALC.computeBalancesByWeight(transactions);
+    }
     App.state.settings.companyName = await global.DB.getSetting('companyName', '');
     App.state.settings.lang = await global.DB.getSetting('lang', 'ar');
     const wf = await global.DB.getSetting('weightFactor', 7.5);
@@ -206,7 +218,17 @@
     });
   }
   function navigate(route) {
-    const target = ROUTE_REDIRECT[route] || route;
+    let target = ROUTE_REDIRECT[route] || route;
+    /* بوابة الصلاحيات: المسار لا يُفتح إن كان ممنوعًا لدور الجلسة الحالية —
+       حماية تعمل حتى مع تعديل الرابط يدويًا (الفرض النهائي في RLS). */
+    if (global.PERM && global.PERM.state.role != null && !global.PERM.routeAllowed(target)) {
+      const fallback = global.PERM.isWarehouse() ? 'inventory' : 'dashboard';
+      if (target !== fallback) {
+        const ar2 = UI.getLang() === 'ar';
+        try { UI.toast(ar2 ? 'هذا القسم غير متاح لصلاحيات حسابك' : 'This section is not available for your role', 'err'); } catch (e2) { /* noop */ }
+        target = fallback;
+      }
+    }
     currentRoute = target;
     /* keep the URL in sync (deep links + refresh keep their context);
        replaceState avoids an extra history entry and hashchange loops */
@@ -890,7 +912,7 @@
             <th>${lang ? 'المقاسات والكميات' : 'Sizes & quantities'}</th>
             <th>${t('customer')}</th><th>${t('permit')}</th>
             <th class="num">${t('addQty')}</th><th class="num">${t('outQty')}</th>
-            <th>${t('settlement')}</th><th>${t('actions')}</th>
+            <th>${t('settlement')}</th><th class="actions-cell">${t('actions')}</th>
           </tr></thead>
           <tbody>${slice.length ? slice.map(groupRowHtml).join('') :
             `<tr><td colspan="11" class="empty">${esc(t('emptyState'))}</td></tr>`}</tbody>
@@ -1314,7 +1336,7 @@
         <thead><tr><th>${ar2() ? 'اسم العميل' : 'Customer'}</th>
           <th class="num">${ar2() ? 'عدد الأذون' : 'Permits'}</th>
           <th class="num">${ar2() ? 'إجمالي الصرف (بكر)' : 'Total issued (bales)'}</th>
-          <th>${ar2() ? 'المصدر' : 'Source'}</th><th>${t('actions')}</th></tr></thead>
+          <th>${ar2() ? 'المصدر' : 'Source'}</th><th class="actions-cell">${t('actions')}</th></tr></thead>
         <tbody id="cu-rows"></tbody></table></div>`;
     let rows = [];
     async function load() {
@@ -1471,35 +1493,77 @@
     if (el2) el2.textContent = msg;
   }
 
+  /* إخفاء عناصر القائمة غير المسموحة لدور الجلسة (المدير يرى الكل) */
+  function filterNavByRole() {
+    if (!global.PERM || global.PERM.state.role == null) return;
+    const groups = new Set();
+    document.querySelectorAll('.nav-item').forEach((n) => {
+      const route = n.dataset.route;
+      const ok = global.PERM.navVisible(route);
+      n.style.display = ok ? '' : 'none';
+      if (ok) {
+        const grp = n.closest('.app-shell');
+        const title = n.previousElementSibling;
+        if (title && title.classList.contains('nav-group-title')) groups.add(title);
+      }
+    });
+    /* عناوين المجموعات التي لم يبق لها عناصر مرئية تُخفى أيضًا */
+    document.querySelectorAll('.nav-group-title').forEach((ttl) => {
+      let sib = ttl.nextElementSibling, any = false;
+      while (sib && !sib.classList.contains('nav-group-title')) {
+        if (sib.classList.contains('nav-item') && sib.style.display !== 'none') { any = true; break; }
+        sib = sib.nextElementSibling;
+      }
+      if (!any) ttl.style.display = 'none';
+      else groups.add(ttl);
+    });
+  }
+
+  /* مؤشر المزامنة في الشريط العلوي: الحالة + آخر مزامنة + ضغط = مزامنة الآن */
+  function wireSyncChip() {
+    const chip = document.getElementById('sync-chip');
+    if (!chip || !global.SYNC) return;
+    const txt = document.getElementById('sync-chip-txt');
+    const dot = document.getElementById('sync-chip-dot');
+    const paint = () => {
+      const s = global.SYNC.status;
+      const signed = global.PERM && global.PERM.signedIn();
+      if (!signed) { chip.hidden = true; return; }
+      chip.hidden = false;
+      const cls = s.state === 'syncing' ? 'sync-busy'
+        : s.state === 'error' ? 'sync-err'
+        : (!s.online || s.state === 'offline' || s.state === 'idle') ? 'sync-off'
+        : 'sync-ok';
+      chip.className = 'sync-chip ' + cls;
+      const ar = UI.getLang() === 'ar';
+      txt.textContent = s.state === 'syncing' ? (ar ? 'جارٍ المزامنة…' : 'Syncing…')
+        : s.state === 'error' ? (ar ? 'فشل المزامنة' : 'Sync failed')
+        : !s.online ? (ar ? 'غير متصل' : 'Offline')
+        : s.state === 'ok' ? (s.lastSync ? new Date(s.lastSync).toLocaleTimeString('en-GB') : (ar ? 'متماثلة' : 'Synced'))
+        : (ar ? 'جاهزة' : 'Ready');
+    };
+    chip.addEventListener('click', () => {
+      if (global.SYNC.status.state !== 'syncing') global.SYNC.run().catch(() => {});
+    });
+    try { UI.EventBus.on('sync-status', paint); } catch (e) { /* noop */ }
+    try { UI.EventBus.on('lang', paint); } catch (e2) { /* noop */ }
+    window.addEventListener('online', paint);
+    window.addEventListener('offline', paint);
+    paint();
+    setInterval(paint, 30000); /* تحديث الوقت المعروض */
+  }
+
   async function boot() {
     if (boot._started) return; /* prevent double initialization */
     boot._started = true;
 
-    setLoadingStatus(UI.getLang() === 'ar' ? 'فتح قاعدة البيانات المحلية…' : 'Opening the local database…');
+    const ar = UI.getLang() === 'ar';
+    setLoadingStatus(ar ? 'فتح قاعدة البيانات المحلية…' : 'Opening the local database…');
     await global.DB.open(); /* typed errors: blocked / timeout / unavailable */
 
-    setLoadingStatus(UI.getLang() === 'ar' ? 'تحميل الأصناف والحركات…' : 'Loading products & movements…');
-    document.querySelectorAll('.nav-item').forEach((n) => {
-      n.addEventListener('click', (e) => { e.preventDefault(); navigate(n.dataset.route); });
-    });
-    const burger = document.getElementById('nav-toggle');
-    if (burger) burger.addEventListener('click', () => document.body.classList.toggle('nav-open'));
-    const backdrop = document.getElementById('nav-backdrop');
-    if (backdrop) backdrop.addEventListener('click', closeMobileNav);
-
-    await loadAll();
-    document.body.classList.add('loaded');
-    navigate((location.hash || '#dashboard').replace('#', ''));
-    /* مهاجرات آمنة بعد أول عرض ناجح — لا تحجب التشغيل أبدًا */
-    runSafeMigrations().catch((e) => console.warn('[migrations]', e));
-
-    window.addEventListener('hashchange', () => {
-      const r = location.hash.replace('#', '');
-      if (r && r !== currentRoute) navigate(r);
-    });
-
-    /* PWA service worker — registered after the app renders so a slow SW
-       can never block first paint; updates prompt instead of blocking. */
+    /* PWA service worker — مُسجّل أولًا قبل بوابة الدخول حتى يُثبَّت العمل
+       دون إنترنت حتى لمن هو على شاشة الدخول (التسجيل غير متزامن ولا يحجب
+       أي عرض)، وتحديثاته تُطبَّق بآلية SKIP_WAITING القائمة. */
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
       let reloadingForWorker = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -1523,6 +1587,41 @@
         });
       }).catch((e) => console.warn('[sw] registration failed', e));
     }
+
+    /* بوابة المصادقة: تُحدد الدور قبل تحميل أي بيانات — شاشة دخول كاملة
+       عند غياب الجلسة، واستعادة الجلسة المحفوظة عند وجودها (تعمل دون
+       إنترنت ببيانات الكاش). وضع محلي مؤقت إن كان الجهاز بلا اتصال. */
+    if (global.AUTH && global.PERM) {
+      setLoadingStatus(ar ? 'التحقق من الحساب…' : 'Checking your account…');
+      await global.AUTH.ensureSignedIn();
+    }
+
+    setLoadingStatus(ar ? 'تحميل الأصناف والحركات…' : 'Loading products & movements…');
+    document.querySelectorAll('.nav-item').forEach((n) => {
+      n.addEventListener('click', (e) => { e.preventDefault(); navigate(n.dataset.route); });
+    });
+    const burger = document.getElementById('nav-toggle');
+    if (burger) burger.addEventListener('click', () => document.body.classList.toggle('nav-open'));
+    const backdrop = document.getElementById('nav-backdrop');
+    if (backdrop) backdrop.addEventListener('click', closeMobileNav);
+    filterNavByRole();
+
+    await loadAll();
+    document.body.classList.add('loaded');
+    navigate((location.hash || '#dashboard').replace('#', ''));
+    /* مهاجرات آمنة بعد أول عرض ناجح — لا تحجب التشغيل أبدًا */
+    runSafeMigrations().catch((e) => console.warn('[migrations]', e));
+
+    /* حلقة المزامنة التلقائية + المؤشر العلوي (للمسجلين فقط) */
+    if (global.SYNC) {
+      global.SYNC.startAutoSync();
+      wireSyncChip();
+    }
+
+    window.addEventListener('hashchange', () => {
+      const r = location.hash.replace('#', '');
+      if (r && r !== currentRoute) navigate(r);
+    });
 
     /* offline indicator — distinct from database errors */
     const badge = document.getElementById('net-status');
@@ -1580,22 +1679,36 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     let settled = false;
-    /* belt & braces: even if boot() somehow never settles, show a way out */
-    const startupTimer = setTimeout(() => {
-      if (!settled) showBootError(global.UI.I18N && new Error(
-        UI.getLang() === 'ar'
-          ? 'استغرق بدء التشغيل أكثر من 15 ثانية. أغلق أي تبويبات أخرى للتطبيق ثم أعد المحاولة.'
-          : 'Startup took longer than 15 seconds. Close other app tabs and retry.'
-      ));
-    }, 15000);
+    let startupTimer = null;
+    const watchdogMsg = () => global.UI.I18N && new Error(
+      UI.getLang() === 'ar'
+        ? 'استغرق بدء التشغيل أكثر من 15 ثانية. أغلق أي تبويبات أخرى للتطبيق ثم أعد المحاولة.'
+        : 'Startup took longer than 15 seconds. Close other app tabs and retry.'
+    );
+    /* belt & braces: even if boot() somehow never settles, show a way out.
+       المؤقّت لا يُسلَّح إلا بعد حل بوابة الدخول — الانتظار على شاشة الدخول
+       ليس عطلًا (المستخدم قد يجلس عليها ساعات قبل أن يكتب بياناته). */
+    const armWatchdog = () => {
+      if (startupTimer || settled) return;
+      startupTimer = setTimeout(() => {
+        if (!settled) showBootError(watchdogMsg());
+      }, 15000);
+    };
+    if (global.AUTH) {
+      global.AUTH.on((evt) => {
+        if (evt && (evt.type === 'signed-in' || evt.type === 'local' || evt.type === 'blocked')) armWatchdog();
+      });
+    } else {
+      armWatchdog();
+    }
     boot().then(() => {
       settled = true;
-      clearTimeout(startupTimer);
+      if (startupTimer) clearTimeout(startupTimer);
       const loading = document.getElementById('boot-loading');
       if (loading) loading.remove();
     }).catch((error) => {
       settled = true;
-      clearTimeout(startupTimer);
+      if (startupTimer) clearTimeout(startupTimer);
       showBootError(error);
     });
   });

@@ -56,13 +56,16 @@
   const ROUTE_ACCESS = {
     admin: 'all',
     local: 'all',
-    warehouse: ['inventory', 'issuedocs', 'issuedoc'],
+    /* أمين المخزن: الرصيد الحالي + أذون الصرف (نافذة اليومين تفرضها RLS
+       والواجهة معًا) + سجل حركات الصرف للنافذة نفسها + شاشة المزامنة. */
+    warehouse: ['inventory', 'issuedocs', 'issuedoc', 'outlog', 'sync'],
     '': [],
   };
 
   /* قدرات محددة تُفحص قبل كل زر كتابة (إضافة/تعديل/حذف/اعتماد…) */
   const CAPABILITIES = [
-    'add',            // إضافة أي بيانات (بكر، حركات، أذون، عملاء، أصناف، حجوزات)
+    'add',            // إضافة أي بيانات (بكر، حركات، عملاء، أصناف، حجوزات)
+    'addPermit',      // إنشاء إذن صرف جديد (أمين المخزن مسموح له فقط بهذا)
     'edit',           // تعديل أي بيانات
     'delete',         // حذف أي بيانات
     'approve',        // اعتماد أذون الصرف
@@ -83,8 +86,9 @@
   const MATRIX = {
     admin: CAPABILITIES.reduce((m, c) => { m[c] = true; return m; }, {}),
     local: CAPABILITIES.reduce((m, c) => { m[c] = c !== 'sync' && c !== 'oldPermits' ? true : (c === 'oldPermits'); return m; }, {}),
-    /* أمين المخزن: عرض + بحث + طباعة فقط */
-    warehouse: { print: true },
+    /* أمين المخزن: عرض + طباعة + إنشاء إذن صرف جديد فقط (يبقى مسودة حتى
+       اعتماده من مدير النظام — الاعتماد يخصم من المخزن). */
+    warehouse: { print: true, addPermit: true },
     '': {},
   };
 

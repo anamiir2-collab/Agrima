@@ -1,5 +1,5 @@
 /* =========================================================================
-   style.css — Agrima ERP · UI v10 (طراز ERP المؤسسي)
+   style.css — Agrima ERP · UI v11 (طراز ERP المؤسسي) + طبقة السحابة
    Business ERP look — Arabic RTL, mobile-first, offline-safe.
    -------------------------------------------------------------------------
    Palette (هادئة احترافية: كحلي / رمادي / أبيض + لمسات حالة):
@@ -137,11 +137,15 @@ code { background: var(--gray-50); padding: .1rem .4rem; border-radius: 6px; dir
   display: inline-flex; align-items: center; gap: .3rem;
   font-size: .74rem; font-weight: 700; white-space: nowrap;
   padding: .22rem .6rem; border-radius: 999px; border: 1px solid;
+  cursor: pointer; background: none;
 }
 .sync-ok  { background: var(--green-50); color: var(--success); border-color: #BBDFC8; }
 .sync-busy{ background: var(--brand-soft); color: var(--secondary); border-color: #C5D7EC; }
 .sync-err { background: var(--red-50); color: var(--danger); border-color: #F3C9C9; }
 .sync-off { background: var(--gray-50); color: var(--text-2); border-color: var(--line-strong); }
+.sync-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: .9; flex: none; }
+.sync-busy .sync-dot { animation: syncPulse 1s ease-in-out infinite; }
+@keyframes syncPulse { 50% { opacity: .2; } }
 
 /* مستخدم الشريط العلوي */
 .topbar-user { position: relative; display: flex; align-items: center; }

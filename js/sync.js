@@ -13,8 +13,9 @@
       (resurrect) بعد المزامنة.
    5) عمليات المسح الشامل (wipe) تُسجّل عظام قبر لكل ما حُذف قبل المسح —
       فلا تعود السجلات الممسوحة من السحابة.
-   6) أمين المخزن: سحب فقط وبصلاحيات RLS نفسها — أذون آخر يومين والرصيد
-      التجميعي؛ ولا يرفع أي شيء إلى السحابة مطلقًا.
+   6) أمين المخزن: يرى رصيدًا تجميديًا وأذون نافذة اليومين عبر RLS ووظائف
+      SECURITY DEFINER فقط — يرفع أذون الصرف التي أنشأها محليًا (داخل
+      النافذة) ولا يرفع أي بيانات أخرى إلى السحابة مطلقًا.
    7) كل جلسة مزامنة تُسجَّل في sync_logs (نجاح/فشل/أعداد/أخطاء).
    8) أي فشل شبكة لا يمس البيانات المحلية — المحاولة القادمة تعيد ما فشل.
    ========================================================================= */
@@ -103,6 +104,7 @@
         sid: r.sid || r.id, permit_no: r.permitNo, cls: r.cls, customer: r.customer,
         date: r.date, notes: r.notes || '', status: r.status, lines: r.lines || [],
         totals: r.totals || null, source: r.source || 'permit', group_id: r.groupId || null,
+        created_by: r.created_by || PERM.state.userId || null,
         approved_at: r.approvedAt || null, created_at: r.createdAt || null,
         updated_at: r.updatedAt || r.createdAt || nowISO(),
       }),
@@ -399,7 +401,7 @@
       /* تأكد من وجود متاجر المزامنة (ترحيل v4) */
       await global.DB.open();
 
-      /* ---------- أمين المخزن: سحب فقط + تطهير النافذة ---------- */
+      /* ---------- أمين المخزن: سحب + رفع أذونه المحلية فقط ---------- */
       if (warehouse) {
         const nb = await pullKeeperStock();
         const ntx = await pullKeeperRecentOutRows();
@@ -409,13 +411,33 @@
         await setSetting('pull:permits', startedAt);
         await setSetting('pull:reels', startedAt);
         await setSetting('pull:rolls', startedAt);
+        /* رفع أذون الصرف أنشئت على هذا الجهاز ولم تُرفع بعد (مسودات أمين
+           المخزن). RLS يسمح بالإدراج داخل نافذة اليومين فقط والفشل يعاد
+           تلقائيًا في الدورة التالية — لا يُعتبر السجل متزامنًا قبل تأكيد
+           الحفظ في Supabase (العلّم بالـ syncedAt يحدث بعد نجاح الرفع فقط). */
+        let pushedPermits = 0, failedPermits = 0;
+        try {
+          const res = await pushStore('permits', STORES.permits, null, new Set());
+          pushedPermits = res.pushed; failedPermits = res.failed;
+          logs.push({ direction: 'push', store: 'permits', rows: res.pushed, ok: res.failed === 0, message: res.failed ? `${res.failed} فشل` : null });
+        } catch (e) {
+          ok = false;
+          logs.push({ direction: 'push', store: 'permits', rows: 0, ok: false, message: e.message });
+        }
         await setSetting('lastSyncAt', startedAt);
         const purged = await purgeKeeperWindow();
-        setStatus({ state: 'ok', lastSync: startedAt, message: 'تم تحديث الرصيد وأذون اليومين', pending: 0 });
+        setStatus({
+          state: failedPermits ? 'error' : 'ok',
+          lastSync: startedAt,
+          pending: failedPermits,
+          message: failedPermits
+            ? 'فشل رفع بعض الأذون — سيعاد تلقائيًا'
+            : `تم تحديث الرصيد وأذون اليومين${pushedPermits ? ` — رفع ${pushedPermits} إذن` : ''}`,
+        });
         logs.push({ direction: 'pull', store: 'stock', rows: nb + ntx, ok: true });
         await logSync(logs);
         try { global.App && global.App.refresh(); } catch (e) { /* noop */ }
-        return { pulled: { balances: nb, outRows: ntx, permits: np.applied || 0, reels: nr.applied || 0, rolls: nro.applied || 0, purged } };
+        return { pulled: { balances: nb, outRows: ntx, permits: np.applied || 0, reels: nr.applied || 0, rolls: nro.applied || 0, purged }, pushed: pushedPermits };
       }
 
       /* ---------- المدير: سحب ثم دفع ---------- */
@@ -500,9 +522,31 @@
     } catch (e) { /* يُلتقط في الدفع الدوري لاحقًا (updatedAt > lastPush) */ }
   }
 
+  /* ---------------- Realtime: تحديث لحظي من الأجهزة الأخرى ----------------
+     اشتراك في بث Supabase (يحترم RLS تلقائيًا) — أي إضافة/تعديل/حذف في
+     السحابة يستدعي مزامنة فورية بعد تجميع الأحداث المتتالية (debounce).
+     إن تعذر البث تبقى المزامنة الدورية كل دقيقتين كما هي. */
+  let _rtChannel = null, _rtTimer = null;
+  function startRealtime() {
+    const sb = SB.client();
+    if (!sb || _rtChannel || typeof window === 'undefined') return;
+    try {
+      _rtChannel = sb.channel('agrima-changes')
+        .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+          if (!status.online || _running || !PERM.signedIn()) return;
+          clearTimeout(_rtTimer);
+          _rtTimer = setTimeout(() => run().catch(() => {}), 1500);
+        })
+        .subscribe((s) => {
+          if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') { try { sb.removeChannel(_rtChannel); } catch (e2) { /* noop */ } _rtChannel = null; }
+        });
+    } catch (e) { /* بث غير متاح — الدورية تكفي */ }
+  }
+
   /* مؤقّت دوري: مزامنة تلقائية للمدير كل دقيقتين عند الاتصال */
   function startAutoSync() {
     if (typeof window === 'undefined') return;
+    startRealtime();
     setInterval(() => {
       if (status.online && PERM.can('sync')) run().catch(() => {});
     }, 120000);

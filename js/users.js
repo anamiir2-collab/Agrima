@@ -58,7 +58,8 @@
           <button class="btn btn-primary" id="us-add">+ مستخدم جديد</button>
         </div></div>
       <p class="muted small">الأدوار: <strong>مدير النظام</strong> — كل الصلاحيات دون استثناء ·
-        <strong>أمين المخزن</strong> — عرض الرصيد الحالي وأذون اليوم والأمس وطباعتها فقط، بلا أي إضافة أو تعديل أو حذف.
+        <strong>أمين المخزن</strong> — عرض الرصيد الحالي وأذون اليوم والأمس وطباعتها وإنشاء إذن صرف جديد
+        (يبقى مسودة حتى اعتماد مدير النظام)، بلا تعديل أو حذف أو اعتماد أو إعدادات.
         الدور محفوظ في قاعدة البيانات وتُفرض قيوده بسياسات RLS على مستوى Supabase نفسها.</p>
       <div class="card table-wrap" id="us-table"><div class="spinner"></div></div>`;
 
@@ -74,7 +75,7 @@
         <table class="data-table">
           <thead><tr>
             <th>الاسم</th><th>البريد الإلكتروني</th><th>الدور</th><th>الحالة</th>
-            <th>آخر دخول</th><th>تاريخ الإنشاء</th><th>إجراءات</th>
+            <th>آخر دخول</th><th>تاريخ الإنشاء</th><th class="actions-cell">إجراءات</th>
           </tr></thead>
           <tbody>${rows.length ? rows.map((u) => `
             <tr class="${u.active ? '' : 'row-void'}">
@@ -130,7 +131,7 @@
         <label class="field"><span>دور المستخدم</span>
           <select id="ur-role">
             <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>مدير النظام — كل الصلاحيات</option>
-            <option value="warehouse" ${user.role === 'warehouse' ? 'selected' : ''}>أمين المخزن — قراءة وطباعة فقط</option>
+            <option value="warehouse" ${user.role === 'warehouse' ? 'selected' : ''}>أمين المخزن — الرصيد وأذون اليومين وإنشاء إذن جديد</option>
             <option value="" ${!user.role ? 'selected' : ''}>بدون دور — لا وصول</option>
           </select></label>
         <div class="form-error" id="ur-err"></div>
@@ -216,7 +217,7 @@
           <input id="nu-email" type="email" dir="ltr" placeholder="name@company.com"></label>
         <label class="field"><span>الدور *</span>
           <select id="nu-role">
-            <option value="warehouse">أمين مخزن — قراءة وطباعة فقط</option>
+            <option value="warehouse">أمين مخزن — الرصيد وأذون اليومين وإنشاء إذن جديد</option>
             <option value="admin">مدير نظام — كل الصلاحيات</option>
           </select></label>
         <label class="field"><span>كلمة المرور *</span>

@@ -47,6 +47,15 @@
                     cancelReason, createdAt, updatedAt }
    Procurement changes are audited in the existing `audit` store with
    entity 'supplier' | 'purchase' | 'receive' | 'return'.
+   Stores added in v4 (cloud sync — strictly additive; the v3→v4 upgrade
+     only CREATES the two stores below and never reads, rewrites or deletes
+     any existing record):
+     tombstones  { id "store|sid", store, sid, at } — deleted-record markers
+                   so a deleted record never returns from the cloud.
+     stockview   { key "quality|gsm|size", quality, gsm, size, add, out,
+                   net, updatedAt } — aggregated keeper balances delivered
+                   by the app_stock_balances RPC (RLS-safe) for the
+                   warehouse role whose device holds no raw transactions.
    ========================================================================= */
 (function (global) {
   'use strict';
@@ -54,10 +63,11 @@
   const DB_NAME = 'inventory_pwa_db';
   /* v2: rolls / reels / permits / customers / importlog.
      v3: suppliers / purchases / receives / supreturns (procurement).
+     v4: tombstones / stockview (cloud sync support for offline-first).
      The upgrade handler below ONLY creates object stores & indexes —
      existing stores, keys and records are never read, rewritten or deleted,
      so upgrading a live user database is purely additive (safe migration). */
-  const DB_VERSION = 3;
+  const DB_VERSION = 4;
 
   let _db = null;
   let _openPromise = null;
@@ -172,6 +182,13 @@
           s.createIndex('purchaseId', 'purchaseId', { unique: false });
           s.createIndex('status', 'status', { unique: false });
           s.createIndex('date', 'date', { unique: false });
+        }
+        /* ---- v4 stores (cloud sync: tombstones + keeper stock view) ---- */
+        if (!db.objectStoreNames.contains('tombstones')) {
+          db.createObjectStore('tombstones', { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains('stockview')) {
+          db.createObjectStore('stockview', { keyPath: 'key' });
         }
       };
       req.onsuccess = () => {
@@ -296,6 +313,7 @@
         DB.clear('customers'), DB.clear('importlog'),
         DB.clear('suppliers'), DB.clear('purchases'),
         DB.clear('receives'), DB.clear('supreturns'),
+        DB.clear('tombstones'), DB.clear('stockview'),
       ]).then(() => Promise.all([
         DB.setSetting('lastImport', null),
         DB.setSetting('docSeqTax', null),

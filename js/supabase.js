@@ -13,8 +13,8 @@
 (function (global) {
   'use strict';
 
-  const SUPABASE_URL = 'https://mhobdjqbpsjmbvjditti.supabase.co';
-  const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_BnjxcTO5wkVUhCRdpBtDnw_UyPA6RCS';
+  const SUPABASE_URL = 'https://kcaertzyohhtcftlahcp.supabase.co';
+  const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_NIRgpFyzD_8fZKXrlXvmzQ_yBHmMZ4h';
 
   let _client = null;
 

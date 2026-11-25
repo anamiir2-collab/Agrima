@@ -306,6 +306,24 @@
         out[cls] = n;
       }
     }
+    /* أمين المخزن يرى أذون نافذة اليومين فقط — أعلى رقم في كامل السجل يأتي
+       من قاعدة البيانات عبر app_next_permit_no (SECURITY DEFINER) حتى لا
+       يقترح رقمًا مستخدمًا بالفعل أسبوعًا سابقًا. الرفض النهائي يبقى محميًا
+       بقيود التفرد في السحابة مهما حدث. */
+    if (global.PERM && global.PERM.isWarehouse() && global.SB && global.SB.client() && navigator.onLine) {
+      try {
+        const { data, error } = await global.SB.client().rpc('app_next_permit_no');
+        if (!error && data && typeof data === 'object') {
+          for (const cls of ['ض', 'غ']) {
+            const cloud = Number(cls === 'ض' ? data.tax : data.nontax);
+            if (Number.isFinite(cloud) && cloud + 1 > out[cls]) {
+              out[cls] = cloud + 1;
+              await global.DB.setSetting(SEQ_KEYS[cls], out[cls]);
+            }
+          }
+        }
+      } catch (e) { /* بدون شبكة: العداد المحلي كما هو */ }
+    }
     return { tax: out['ض'], nontax: out['غ'] };
   }
 

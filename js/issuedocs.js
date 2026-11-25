@@ -21,6 +21,7 @@
   'use strict';
   const { t, el, esc, fmtNum, fmtDate, todayISO, toast, confirmDialog, openModal, closeModal } = global.UI;
   const App = global.App;
+  const PERM = global.PERM || { can: () => true };
   const lang = () => global.UI.getLang() === 'ar';
   const ar = lang;
   const familyOf = (name) => App.productFamily(name);
@@ -204,8 +205,8 @@
     host.innerHTML = `
       <div class="page-head"><h2>${esc(t('issuedocs'))}</h2>
         <div class="head-actions">
-          <button class="btn btn-primary" id="docs-new">+ ${ar() ? 'إذن صرف جديد' : 'New issue permit'}</button>
-          <button class="btn btn-ghost" id="docs-exp">${t('exportExcel')}</button>
+          ${PERM.can('add') || PERM.can('addPermit') ? `<button class="btn btn-primary" id="docs-new">+ ${ar() ? 'إذن صرف جديد' : 'New issue permit'}</button>` : ''}
+          ${PERM.can('importExport') ? `<button class="btn btn-ghost" id="docs-exp">${t('exportExcel')}</button>` : ''}
         </div></div>
       <div class="card filters">
         <input type="text" id="doc-q" placeholder="${ar() ? 'بحث برقم الإذن أو اسم العميل…' : 'Search voucher no. / customer…'}">
@@ -268,7 +269,7 @@
             <th>${t('docNo')}</th><th>${t('customer')}</th><th>${t('date')}</th>
             <th>${t('classification')}</th><th>${ar() ? 'الحالة' : 'Status'}</th>
             <th class="num">${t('totalRolls')}</th><th class="num">${t('voucherWeight')} (${t('kg')})</th>
-            <th>${t('actions')}</th>
+            <th class="actions-cell">${t('actions')}</th>
           </tr></thead>
           <tbody>${slice.length ? slice.map(docRowHtml).join('') :
             `<tr><td colspan="8" class="empty">${ar() ? 'لا توجد أذون صرف مطابقة' : 'No matching issue permits'}</td></tr>`}</tbody>
@@ -342,11 +343,17 @@
       const actions = [];
       actions.push(`<button class="icon-btn" data-act="view" data-key="${esc(d.key)}" title="${t('viewDoc')}">👁</button>`);
       actions.push(`<button class="icon-btn" data-act="print" data-key="${esc(d.key)}" title="${t('printDoc')}">🖨</button>`);
-      actions.push(`<button class="icon-btn" data-act="edit" data-key="${esc(d.key)}" title="${t('edit')}">✎</button>`);
-      if (d.kind === 'permit' && d.status === 'draft') {
+      /* التعديل والاعتماد والحذف لمدير النظام فقط — أمين المخزن يرى العرض
+         والطباعة (وإنشاء إذن جديد من زر الشاشة) دون أي زر كتابة على السجلات. */
+      if (PERM.can('edit')) {
+        actions.push(`<button class="icon-btn" data-act="edit" data-key="${esc(d.key)}" title="${t('edit')}">✎</button>`);
+      }
+      if (d.kind === 'permit' && d.status === 'draft' && PERM.can('approve')) {
         actions.push(`<button class="icon-btn approve" data-act="approve" data-key="${esc(d.key)}" title="${ar() ? 'اعتماد الإذن وخصم الرصيد' : 'Approve'}">✔</button>`);
       }
-      actions.push(`<button class="icon-btn danger" data-act="del" data-key="${esc(d.key)}" title="${t('del')}">🗑</button>`);
+      if (PERM.can('delete')) {
+        actions.push(`<button class="icon-btn danger" data-act="del" data-key="${esc(d.key)}" title="${t('del')}">🗑</button>`);
+      }
       return `<tr class="voucher-row ${d.kind === 'permit' && d.status === 'draft' ? 'row-draft' : ''}">
         <td data-label="${t('docNo')}"><button class="voucher-no" data-act="view" data-key="${esc(d.key)}" title="${t('viewDoc')}">${esc(d.permitNo || '—')}</button>
           ${d.multiDate ? `<span class="badge badge-multi" title="${ar() ? 'الإذن له أكثر من تاريخ — المعتمد الأحدث' : ''}">${ar() ? 'أحدث تاريخ' : 'latest date'}</span>` : ''}</td>
@@ -370,8 +377,10 @@
       host.querySelector('#doc-sort').value = 'new';
       applyFilters();
     });
-    host.querySelector('#docs-new').addEventListener('click', () => { App.pendingEdit = null; App.navigate('baker-issue'); });
-    host.querySelector('#docs-exp').addEventListener('click', () => {
+    const newBtn = host.querySelector('#docs-new');
+    if (newBtn) newBtn.addEventListener('click', () => { App.pendingEdit = null; App.navigate('baker-issue'); });
+    const expBtn = host.querySelector('#docs-exp');
+    if (expBtn) expBtn.addEventListener('click', () => {
       const headers = [t('docNo'), t('customer'), t('date'), t('classification'), ar() ? 'الحالة' : 'Status',
         t('quality'), t('gsm'), t('size'), t('outQty'), `${t('voucherWeight')} (${t('kg')})`];
       const rows = [];

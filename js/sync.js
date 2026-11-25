@@ -467,11 +467,11 @@
         const lastSuccessfulSync = await getSetting('lastSyncAt', null);
         const purged = await purgeKeeperWindow();
         setStatus({
-          state: failedPermits ? 'error' : 'ok',
+          state: ok && failedPermits === 0 ? 'ok' : 'error',
           lastSync: lastSuccessfulSync,
           pending: failedPermits,
-          message: failedPermits
-            ? 'فشل رفع بعض الأذون — سيعاد تلقائيًا'
+          message: !ok || failedPermits
+            ? 'فشل جزء من المزامنة — سيعاد تلقائيًا'
             : `تم تحديث الرصيد وأذون اليومين${pushedPermits ? ` — رفع ${pushedPermits} إذن` : ''}`,
         });
         logs.push({ direction: 'pull', store: 'stock', rows: nb + ntx, ok: true });

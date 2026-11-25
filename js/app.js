@@ -1558,6 +1558,10 @@
       hint = ar ? 'افتح البرنامج مرة واحدة مع اتصال إنترنت حتى يُثبَّت للعمل بدون إنترنت.' : 'Open once online so the app can install for offline use.';
     }
     const message = error && error.message ? error.message : String(error || 'Unknown error');
+    const cause = error && error.cause;
+    const detail = cause
+      ? [cause.name, cause.message].filter(Boolean).join(': ')
+      : (error && error.name && error.name !== 'Error' ? error.name : '');
     console.error('[startup failed]', error);
     host.innerHTML = `
       <div class="boot-error" role="alert">
@@ -1566,6 +1570,7 @@
         <p>${ar ? 'حدثت مشكلة أثناء فتح قاعدة البيانات المحلية أو تحميل ملفات البرنامج.' : 'A problem occurred while opening the local database or loading app files.'}</p>
         ${hint ? `<p class="boot-error-hint">${esc(hint)}</p>` : ''}
         <p class="muted small" style="overflow-wrap:anywhere" dir="ltr">${esc(message)}</p>
+        ${detail ? `<p class="muted small" style="overflow-wrap:anywhere" dir="ltr">Database detail: ${esc(detail)}</p>` : ''}
         <button type="button" class="btn btn-primary" id="boot-retry">${ar ? 'إعادة المحاولة' : 'Try again'}</button>
         <p class="muted small">${ar ? 'بياناتك المحفوظة لم تُحذف — بقاءها مضمون. إن استمرت المشكلة أرسل صورة لهذه الرسالة.' : 'Your saved data was NOT deleted. If this persists, send a screenshot of this message.'}</p>
       </div>`;

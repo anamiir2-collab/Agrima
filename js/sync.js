@@ -189,7 +189,7 @@
       const u = r.updatedAt || r.createdAt || r.at || null;
       if (!u) return false;
       if (r.syncedAt && String(u) <= String(r.syncedAt)) return false;
-      return String(u) > String(lastPushAt || '');
+      return String(u) >= String(lastPushAt || '');
     },
   };
 
@@ -255,7 +255,7 @@
     await ensureStoreSids(storeName);
     const field = cfg.orderBy === 'at' ? 'at' : 'updatedAt';
     const range = lastPushAt && typeof IDBKeyRange !== 'undefined'
-      ? IDBKeyRange.lowerBound(lastPushAt, true) : undefined;
+      ? IDBKeyRange.lowerBound(lastPushAt, false) : undefined;
     const indexed = await global.DB.getAllByIndexRange(storeName, field, range);
     const retryRows = retrySids.size
       ? await global.DB.getManyByIndex(storeName, 'sid', [...retrySids]) : [];
@@ -433,7 +433,7 @@
     setStatus({ state: 'syncing', message: 'جارٍ المزامنة…', progress: { completed: 0, total: warehouse ? 6 : 13, phase: 'pull' } });
     const startedAt = nowISO();
     const logs = [];
-    let ok = true;
+    let ok = true, changedLocal = false;
     try {
       /* تأكد من وجود متاجر المزامنة (ترحيل v4) */
       await global.DB.open();
@@ -490,6 +490,7 @@
         try {
           const res = await pullStore(storeName, cfg, lastPull);
           conflictsTotal += res.conflicts || 0;
+          if (res.applied) changedLocal = true;
           await setSetting('pull:' + storeName, startedAt);
           logs.push({ direction: 'pull', store: storeName, rows: res.applied || 0, ok: true });
         } catch (e) {
@@ -563,7 +564,7 @@
     } finally {
       _running = false;
       try {
-        global.App && global.App.refresh && !PERM.isWarehouse() && global.App.refresh();
+        global.App && global.App.refresh && changedLocal && !PERM.isWarehouse() && global.App.refresh();
       } catch (e) { /* noop */ }
       if (_queued) {
         _queued = false;
@@ -588,7 +589,7 @@
      اشتراك في بث Supabase (يحترم RLS تلقائيًا) — أي إضافة/تعديل/حذف في
      السحابة يستدعي مزامنة فورية بعد تجميع الأحداث المتتالية (debounce).
      إن تعذر البث تبقى المزامنة الدورية كل دقيقتين كما هي. */
-  let _rtChannel = null;
+  let _rtChannel = null, _rtTimer = null;
   function startRealtime() {
     const sb = SB.client();
     if (!sb || _rtChannel || typeof window === 'undefined') return;

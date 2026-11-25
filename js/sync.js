@@ -447,6 +447,7 @@
           pullStore('rolls', STORES.rolls, await getSetting('pull:rolls', null)),
         ]);
         await Promise.all(['permits', 'reels', 'rolls'].map((name) => setSetting('pull:' + name, startedAt)));
+        setStatus({ progress: { completed: 5, total: 6, phase: 'pull' } });
         /* رفع أذون الصرف أنشئت على هذا الجهاز ولم تُرفع بعد (مسودات أمين
            المخزن). RLS يسمح بالإدراج داخل نافذة اليومين فقط والفشل يعاد
            تلقائيًا في الدورة التالية — لا يُعتبر السجل متزامنًا قبل تأكيد
@@ -466,6 +467,7 @@
         if (ok && failedPermits === 0) await setSetting('lastSyncAt', nowISO());
         const lastSuccessfulSync = await getSetting('lastSyncAt', null);
         const purged = await purgeKeeperWindow();
+        setStatus({ progress: { completed: 6, total: 6, phase: 'done' } });
         setStatus({
           state: ok && failedPermits === 0 ? 'ok' : 'error',
           lastSync: lastSuccessfulSync,

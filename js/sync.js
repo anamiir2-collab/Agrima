@@ -387,8 +387,8 @@
     const sb = SB.client();
     const { data, error } = await sb.rpc('app_recent_out_rows');
     if (error) throw error;
-    const localRows = await global.DB.getAll('transactions');
-    const bySid = new Map(localRows.filter((r) => r.sid).map((r) => [r.sid, r]));
+    const bySidRows = await global.DB.getManyByIndex('transactions', 'sid', (data || []).map((r) => r.sid));
+    const bySid = new Map(bySidRows.filter(Boolean).map((r) => [r.sid, r]));
     const toWrite = [];
     for (const r of data || []) {
       if (bySid.has(r.sid)) continue; /* موجود محليًا — لا تكرار */
@@ -440,32 +440,35 @@
 
       /* ---------- أمين المخزن: سحب + رفع أذونه المحلية فقط ---------- */
       if (warehouse) {
-        const nb = await pullKeeperStock();
-        const ntx = await pullKeeperRecentOutRows();
-        const np = await pullStore('permits', STORES.permits, await getSetting('pull:permits', null));
-        const nr = await pullStore('reels', STORES.reels, await getSetting('pull:reels', null));
-        const nro = await pullStore('rolls', STORES.rolls, await getSetting('pull:rolls', null));
-        await setSetting('pull:permits', startedAt);
-        await setSetting('pull:reels', startedAt);
-        await setSetting('pull:rolls', startedAt);
+        const [nb, ntx, np, nr, nro] = await Promise.all([
+          pullKeeperStock(), pullKeeperRecentOutRows(),
+          pullStore('permits', STORES.permits, await getSetting('pull:permits', null)),
+          pullStore('reels', STORES.reels, await getSetting('pull:reels', null)),
+          pullStore('rolls', STORES.rolls, await getSetting('pull:rolls', null)),
+        ]);
+        await Promise.all(['permits', 'reels', 'rolls'].map((name) => setSetting('pull:' + name, startedAt)));
         /* رفع أذون الصرف أنشئت على هذا الجهاز ولم تُرفع بعد (مسودات أمين
            المخزن). RLS يسمح بالإدراج داخل نافذة اليومين فقط والفشل يعاد
            تلقائيًا في الدورة التالية — لا يُعتبر السجل متزامنًا قبل تأكيد
            الحفظ في Supabase (العلّم بالـ syncedAt يحدث بعد نجاح الرفع فقط). */
         let pushedPermits = 0, failedPermits = 0;
         try {
-          const res = await pushStore('permits', STORES.permits, null, new Set());
+          const lastPush = await getSetting('push:permits', null);
+          const res = await pushStore('permits', STORES.permits, lastPush, new Set());
           pushedPermits = res.pushed; failedPermits = res.failed;
+          if (res.failed === 0) await setSetting('push:permits', startedAt);
+          else ok = false;
           logs.push({ direction: 'push', store: 'permits', rows: res.pushed, ok: res.failed === 0, message: res.failed ? `${res.failed} فشل` : null });
         } catch (e) {
           ok = false;
           logs.push({ direction: 'push', store: 'permits', rows: 0, ok: false, message: e.message });
         }
-        await setSetting('lastSyncAt', startedAt);
+        if (ok && failedPermits === 0) await setSetting('lastSyncAt', nowISO());
+        const lastSuccessfulSync = await getSetting('lastSyncAt', null);
         const purged = await purgeKeeperWindow();
         setStatus({
           state: failedPermits ? 'error' : 'ok',
-          lastSync: startedAt,
+          lastSync: lastSuccessfulSync,
           pending: failedPermits,
           message: failedPermits
             ? 'فشل رفع بعض الأذون — سيعاد تلقائيًا'
@@ -505,6 +508,7 @@
       let pushedTotal = 0, failedTotal = 0, delTotal = 0;
       const newRetry = [];
       const pushNames = ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions', 'audit'];
+      let pushDone = 0;
       await Promise.all(pushNames.map(async (storeName) => {
         const cfg = STORES[storeName];
         if (!cfg || !cfg.toRemote) return;
@@ -519,6 +523,9 @@
         } catch (e) {
           ok = false;
           logs.push({ direction: 'push', store: storeName, rows: 0, ok: false, message: e.message });
+        } finally {
+          pushDone++;
+          setStatus({ progress: { completed: 6 + pushDone, total: 13, phase: 'push' } });
         }
       }));
       try {

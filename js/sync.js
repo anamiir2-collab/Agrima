@@ -421,7 +421,7 @@
   }
 
   /* ================= الجلسة الكاملة ================= */
-  let _running = false, _queued = false, _rtTimer = null;
+  let _running = false, _queued = false;
   async function run(opts) {
     const warehouse = PERM.isWarehouse();
     const sb = SB.client();

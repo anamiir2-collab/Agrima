@@ -283,7 +283,7 @@
     get: (store, key) => tx(store, 'readonly', (st) => st.get(key)),
     count: (store) => tx(store, 'readonly', (st) => st.count()),
     put: (store, val) => tx(store, 'readwrite', (st) => st.put(stampSyncRecord(store, val, false))),
-    add: (store, val) => tx(store, 'readwrite', (st) => st.add(stampSyncRecord(store, val, true))),
+    add: (store, val) => tx(store, 'readwrite', (st) => st.add(stampSyncRecord(store, val, false))),
     del(store, key) {
       if (['products', 'transactions', 'rolls', 'reels', 'permits', 'customers'].includes(store)) {
         return DB.atomic([store], (t) => { t.objectStore(store).delete(key); return true; });
@@ -360,7 +360,7 @@
               return new Proxy(store, {
                 get(st, method) {
                   if (method === 'add' || method === 'put') return (value, ...args) => {
-                    const prepared = stampSyncRecord(name, value, method === 'add');
+                    const prepared = stampSyncRecord(name, value, false);
                     return st[method](prepared, ...args);
                   };
                   if (method === 'delete') return (key) => {

@@ -249,6 +249,16 @@
   }
 
   /* ---------- generic helpers ---------- */
+  const SYNCABLE_STORES = new Set(['products', 'transactions', 'rolls', 'reels', 'permits', 'customers']);
+  function stampSyncRecord(store, value, preserveSynced) {
+    if (!SYNCABLE_STORES.has(store) || !value || typeof value !== 'object') return value;
+    const row = Object.assign({}, value);
+    const now = new Date().toISOString();
+    if (!row.createdAt && !row.at) row.createdAt = now;
+    if (!preserveSynced) row.updatedAt = now;
+    else if (!row.updatedAt) row.updatedAt = row.createdAt || row.at || now;
+    return row;
+  }
   const DB = {
     open,
     getAll: (store) => tx(store, 'readonly', (st) => st.getAll()),
@@ -272,8 +282,8 @@
     },
     get: (store, key) => tx(store, 'readonly', (st) => st.get(key)),
     count: (store) => tx(store, 'readonly', (st) => st.count()),
-    put: (store, val) => tx(store, 'readwrite', (st) => st.put(val)),
-    add: (store, val) => tx(store, 'readwrite', (st) => st.add(val)),
+    put: (store, val) => tx(store, 'readwrite', (st) => st.put(stampSyncRecord(store, val, false))),
+    add: (store, val) => tx(store, 'readwrite', (st) => st.add(stampSyncRecord(store, val, true))),
     del(store, key) {
       if (['products', 'transactions', 'rolls', 'reels', 'permits', 'customers'].includes(store)) {
         return DB.atomic([store], (t) => { t.objectStore(store).delete(key); return true; });
@@ -315,7 +325,7 @@
       return open().then((db) => new Promise((resolve, reject) => {
         const t = db.transaction(store, 'readwrite');
         const st = t.objectStore(store);
-        items.forEach((it) => st.put(it));
+        items.forEach((it) => st.put(stampSyncRecord(store, it, !!(it && it.syncedAt))));
         t.oncomplete = () => resolve(items.length);
         t.onerror = () => reject(t.error);
         t.onabort = () => reject(t.error);
@@ -331,7 +341,7 @@
       return open().then((db) => new Promise((resolve, reject) => {
         let t;
         const requested = Array.isArray(storeNames) ? storeNames.slice() : [storeNames];
-        const syncable = new Set(['products', 'transactions', 'rolls', 'reels', 'permits', 'customers']);
+        const syncable = SYNCABLE_STORES;
         const trackDeletes = requested.some((name) => syncable.has(name));
         const scope = trackDeletes && requested.indexOf('tombstones') < 0
           ? requested.concat('tombstones') : requested;
@@ -349,6 +359,10 @@
               if (!syncable.has(name)) return store;
               return new Proxy(store, {
                 get(st, method) {
+                  if (method === 'add' || method === 'put') return (value, ...args) => {
+                    const prepared = stampSyncRecord(name, value, method === 'add');
+                    return st[method](prepared, ...args);
+                  };
                   if (method === 'delete') return (key) => {
                     const getReq = st.get(key);
                     getReq.onsuccess = () => {

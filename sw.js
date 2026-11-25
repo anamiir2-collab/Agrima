@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v10-erp-r1';
+const CACHE = 'agrima-v10-erp-local-r1';
 
 const PRECACHE = [
   './',
@@ -17,10 +17,6 @@ const PRECACHE = [
   './js/calculations.js',
   './js/database.js',
   './js/ui.js',
-  './js/supabase.js',
-  './js/permissions.js',
-  './js/auth.js',
-  './js/sync.js',
   './js/transactions.js',
   './js/excel.js',
   './js/app.js',
@@ -31,8 +27,6 @@ const PRECACHE = [
   './js/reservations-print.js',
   './js/reports.js',
   './js/backup.js',
-  './js/users.js',
-  './vendor/supabase.js',
   './vendor/xlsx.full.min.js',
   './vendor/chart.umd.min.js',
   './assets/icons/icon-192.png',

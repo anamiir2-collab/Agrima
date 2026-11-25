@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Agrima ERP — إدارة المخزون والبكر وأذون الصرف</title>
-  <meta name="description" content="Agrima ERP: نظام احترافي لإدارة المخزون والرولات والبكر والإنتاج وأذون الصرف وحجوزات العملاء — صلاحيات مدير النظام وأمين المخزن محفوظة في Supabase وفرضها على مستوى قاعدة البيانات — يعمل أونلاين وأوفلاين">
+  <meta name="description" content="Agrima ERP: نظام احترافي لإدارة المخزون والرولات والبكر والإنتاج وأذون الصرف وحجوزات العملاء — يعمل بالكامل داخل المتصفح وبدون إنترنت">
   <meta name="theme-color" content="#0F2B4C">
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="assets/icons/favicon-64.png" type="image/png">
@@ -12,8 +12,8 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="css/style.css?v=v10-erp-r1">
-  <link rel="stylesheet" href="css/print.css?v=v10-erp-r1" media="print">
+  <link rel="stylesheet" href="css/style.css?v=v10-erp-local-r1">
+  <link rel="stylesheet" href="css/print.css?v=v10-erp-local-r1" media="print">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -102,8 +102,6 @@
         <button class="icon-btn nav-burger" id="nav-toggle" aria-label="القائمة">☰</button>
         <div class="topbar-title" data-i18n="appName">Agrima ERP — إدارة المخزون والبكر</div>
         <div class="topbar-space"></div>
-        <div id="sync-chip" class="sync-chip sync-ok" style="display:none">✓ متصل</div>
-        <div id="topbar-user" class="topbar-user"></div>
       </header>
 
       <section id="view" class="view" aria-live="polite">
@@ -136,26 +134,20 @@
   <!-- vendor libraries (local, offline-ready) -->
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="vendor/chart.umd.min.js"></script>
-  <script src="vendor/supabase.js"></script>
 
   <!-- application modules (order matters: layers first, views last) -->
-  <script src="js/calculations.js?v=v10-erp-r1"></script>
-  <script src="js/database.js?v=v10-erp-r1"></script>
-  <script src="js/ui.js?v=v10-erp-r1"></script>
-  <script src="js/supabase.js?v=v10-erp-r1"></script>
-  <script src="js/permissions.js?v=v10-erp-r1"></script>
-  <script src="js/auth.js?v=v10-erp-r1"></script>
-  <script src="js/sync.js?v=v10-erp-r1"></script>
-  <script src="js/transactions.js?v=v10-erp-r1"></script>
-  <script src="js/excel.js?v=v10-erp-r1"></script>
-  <script src="js/app.js?v=v10-erp-r1"></script>
-  <script src="js/rolls.js?v=v10-erp-r1"></script>
-  <script src="js/inventory.js?v=v10-erp-r1"></script>
-  <script src="js/issuedocs.js?v=v10-erp-r1"></script>
-  <script src="js/reservations.js?v=v10-erp-r1"></script>
-  <script src="js/reservations-print.js?v=v10-erp-r1"></script>
-  <script src="js/reports.js?v=v10-erp-r1"></script>
-  <script src="js/backup.js?v=v10-erp-r1"></script>
-  <script src="js/users.js?v=v10-erp-r1"></script>
+  <script src="js/calculations.js?v=v10-erp-local-r1"></script>
+  <script src="js/database.js?v=v10-erp-local-r1"></script>
+  <script src="js/ui.js?v=v10-erp-local-r1"></script>
+  <script src="js/transactions.js?v=v10-erp-local-r1"></script>
+  <script src="js/excel.js?v=v10-erp-local-r1"></script>
+  <script src="js/app.js?v=v10-erp-local-r1"></script>
+  <script src="js/rolls.js?v=v10-erp-local-r1"></script>
+  <script src="js/inventory.js?v=v10-erp-local-r1"></script>
+  <script src="js/issuedocs.js?v=v10-erp-local-r1"></script>
+  <script src="js/reservations.js?v=v10-erp-local-r1"></script>
+  <script src="js/reservations-print.js?v=v10-erp-local-r1"></script>
+  <script src="js/reports.js?v=v10-erp-local-r1"></script>
+  <script src="js/backup.js?v=v10-erp-local-r1"></script>
 </body>
 </html>

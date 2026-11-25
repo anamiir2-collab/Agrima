@@ -135,22 +135,7 @@
     App.state.products = products;
     App.state.transactions = transactions;
     App.state.permits = permits;
-    if (global.PERM && global.PERM.isWarehouse()) {
-      /* أمين المخزن: الرصيد من اللقطة التجميعية المستلمة من النظام
-         (app_stock_balances عبر RLS) — لا يجوز حسابه من الحركات لأن
-         جهازه يحمل أسطر نافذة اليومين فقط وليس كل التاريخ */
-      const viewRows = await global.DB.getAll('stockview');
-      const map = new Map();
-      for (const r of viewRows) {
-        map.set(r.key || global.CALC.comboKey(r.quality, r.gsm, r.size), {
-          quality: r.quality, gsm: r.gsm, size: r.size,
-          add: r.add, out: r.out, net: r.net,
-        });
-      }
-      App.state.balances = map;
-    } else {
-      App.state.balances = global.CALC.computeBalances(transactions);
-    }
+    App.state.balances = global.CALC.computeBalances(transactions);
     App.state.balancesW = global.CALC.computeBalancesByWeight(transactions);
     App.state.settings.companyName = await global.DB.getSetting('companyName', '');
     App.state.settings.lang = await global.DB.getSetting('lang', 'ar');
@@ -210,11 +195,6 @@
   }
 
   let currentRoute = 'dashboard';
-  /* الصفحة الرئيسية لكل دور — أمين المخزن يبدأ من الرصيد الحالي مباشرة */
-  function homeRoute() {
-    if (global.PERM && global.PERM.routeAllowed('inventory') && global.PERM.isWarehouse()) return 'inventory';
-    return 'dashboard';
-  }
   function render() {
     const view = App.views[currentRoute] || App.views.dashboard;
     const host = document.getElementById('view');
@@ -227,23 +207,16 @@
   }
   function navigate(route) {
     const target = ROUTE_REDIRECT[route] || route;
-    /* بوابة الصلاحيات: حتى لو عُدّل الرابط يدويًا لا يفتح مسارًا غير مسموح —
-       المصدر الرسمي للدور هو قاعدة البيانات (RLS) والفحص هنا للواجهة */
-    if (global.PERM && global.PERM.state.role != null && !global.PERM.routeAllowed(target)) {
-      toast(UI.getLang() === 'ar' ? 'لا تملك صلاحية الوصول إلى هذا القسم' : 'No permission for this section', 'err');
-      currentRoute = homeRoute();
-    } else {
-      currentRoute = target;
-    }
+    currentRoute = target;
     /* keep the URL in sync (deep links + refresh keep their context);
        replaceState avoids an extra history entry and hashchange loops */
-    if (location.hash !== '#' + currentRoute) {
-      try { history.replaceState(null, '', '#' + currentRoute); } catch (e2) { /* ignore */ }
+    if (location.hash !== '#' + target) {
+      try { history.replaceState(null, '', '#' + target); } catch (e2) { /* ignore */ }
     }
     document.querySelectorAll('.nav-item').forEach((n) => {
-      n.classList.toggle('active', n.dataset.route === currentRoute);
+      n.classList.toggle('active', n.dataset.route === target);
     });
-    document.title = `${routeTitle(currentRoute)} — ${t('appName')}`;
+    document.title = `${routeTitle(target)} — ${t('appName')}`;
     render();
     closeMobileNav();
   }
@@ -1397,7 +1370,6 @@
         const ok = await confirmDialog({ title: ar2() ? 'حذف عميل' : 'Delete customer', message: `حذف "${rec.name}"؟`, danger: true });
         if (!ok) return;
         await global.DB.del('customers', rec.id);
-        if (global.SYNC && rec.sid) global.SYNC.recordTombstones('customers', [rec.sid]).catch(() => {});
         toast(ar2() ? 'تم الحذف' : 'deleted', 'ok');
         load();
       }));
@@ -1499,144 +1471,12 @@
     if (el2) el2.textContent = msg;
   }
 
-  /* إظهار عناصر القائمة حسب الدور (أمين المخزن يرى قسمين فقط) */
-  function applyNavPermissions() {
-    const role = global.PERM ? global.PERM.state.role : null;
-    if (role == null) return;
-    document.querySelectorAll('.nav-item[data-route]').forEach((n) => {
-      const allowed = global.PERM.routeAllowed(n.dataset.route);
-      n.style.display = allowed ? '' : 'none';
-    });
-    /* أخفِ عناوين المجموعات التي لم يتبقَّ لها أي قسم مسموح */
-    document.querySelectorAll('.nav-group-title').forEach((title) => {
-      let anyVisible = false;
-      let node = title.nextElementSibling;
-      while (node && !node.classList.contains('nav-group-title')) {
-        if (node.classList.contains('nav-item') && node.style.display !== 'none') { anyVisible = true; break; }
-        node = node.nextElementSibling;
-      }
-      title.style.display = anyVisible ? '' : 'none';
-    });
-    document.body.classList.toggle('role-warehouse', global.PERM.isWarehouse());
-    document.body.classList.toggle('role-admin', global.PERM.isAdmin());
-  }
-
-  /* شريط المستخدم: الاسم والدور + حالة المزامنة (شريط علوي) */
-  function renderTopbarUser() {
-    const box = document.getElementById('topbar-user');
-    if (!box) return;
-    const P = global.PERM;
-    const name = (P && (P.state.fullName || (P.isLocal() ? 'وضع محلي' : P.state.email))) || '';
-    const role = P ? P.roleLabel() : '';
-    const show = P && (P.isAdmin() || P.isWarehouse());
-    box.innerHTML = show ? `
-      <div class="user-chip" id="user-chip" role="button" tabindex="0" title="الحساب والصلاحيات">
-        <span class="user-avatar">${esc(String(name || 'U').trim().charAt(0) || 'U')}</span>
-        <span class="user-meta"><strong>${esc(name || 'المستخدم')}</strong><small>${esc(role)}</small></span>
-        <span class="user-caret">▾</span>
-      </div>
-      <div class="user-menu" id="user-menu" hidden>
-        <div class="user-menu-head"><strong>${esc(name || '')}</strong>
-          <span class="muted small">${esc(P.state.email || '')}</span>
-          <span class="badge badge-tax">${esc(role)}</span></div>
-        ${P.isAdmin() ? `<a href="#users" class="user-menu-item" data-menu-route="users">المستخدمون والصلاحيات</a>
-        <a href="#audit" class="user-menu-item" data-menu-route="audit">سجل العمليات</a>
-        <a href="#sync" class="user-menu-item" data-menu-route="sync">المزامنة والحساب</a>` : ''}
-        ${P.isWarehouse() ? `<a href="#sync" class="user-menu-item" data-menu-route="sync">الاتصال والحساب</a>` : ''}
-        <button class="user-menu-item danger" id="um-logout">تسجيل الخروج</button>
-      </div>` : '';
-    const chip = document.getElementById('user-chip');
-    const menu = document.getElementById('user-menu');
-    if (chip && menu) {
-      const toggle = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
-      chip.addEventListener('click', toggle);
-      chip.addEventListener('keydown', (e) => { if (e.key === 'Enter') toggle(e); });
-      document.addEventListener('click', (e) => { if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true; });
-      menu.querySelectorAll('[data-menu-route]').forEach((a) => a.addEventListener('click', () => { menu.hidden = true; navigate(a.dataset.menuRoute); }));
-      const lo = document.getElementById('um-logout');
-      if (lo) lo.addEventListener('click', async () => {
-        menu.hidden = true;
-        if (global.SYNC) { try { await global.SYNC.run(); } catch (e2) { /* محاولة أخيرة للمزامنة */ } }
-        await global.AUTH.signOut();
-        location.reload();
-      });
-    }
-  }
-
-  /* شارة حالة المزامنة في الشريط العلوي */
-  function renderSyncChip(s) {
-    const chip = document.getElementById('sync-chip');
-    if (!chip) return;
-    const P = global.PERM;
-    if (!P || !(P.isAdmin() || P.isWarehouse())) { chip.style.display = 'none'; return; }
-    chip.style.display = '';
-    const online = s ? s.online : navigator.onLine;
-    chip.className = 'sync-chip ' + (!online ? 'sync-off'
-      : s && s.state === 'syncing' ? 'sync-busy'
-      : s && s.state === 'error' ? 'sync-err' : 'sync-ok');
-    chip.textContent = !online ? 'غير متصل — محلي'
-      : s && s.state === 'syncing' ? '⟳ مزامنة…'
-      : s && s.state === 'error' ? '⚠ فشل المزامنة'
-      : s && s.lastSync ? '✓ متماثل ' + new Date(s.lastSync).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-      : '✓ متصل';
-    if (P.isWarehouse()) chip.title = 'استقبال الرصيد وأذون اليومين حسب صلاحياتك';
-    else chip.title = s && s.message ? s.message : 'حالة المزامنة مع Supabase';
-  }
-
-  /* PWA service worker — يُسجَّل مبكرًا وبالتوازي مع بوابة الدخول حتى
-     يثبَّت التطبيق للعمل دون إنترنت من أول زيارة (قبل تسجيل الدخول) */
-  function registerServiceWorker() {
-    if (!('serviceWorker' in navigator) || !(location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) return;
-    let reloadingForWorker = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloadingForWorker) return;
-      reloadingForWorker = true;
-      location.reload();
-    });
-    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(async (reg) => {
-      console.log('[sw] registered, scope', reg.scope);
-      await reg.update().catch(() => {});
-      if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
-      reg.addEventListener('updatefound', () => {
-        const nw = reg.installing;
-        if (!nw) return;
-        nw.addEventListener('statechange', () => {
-          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-            nw.postMessage('SKIP_WAITING');
-          }
-        });
-      });
-    }).catch((e) => console.warn('[sw] registration failed', e));
-  }
-
   async function boot() {
     if (boot._started) return; /* prevent double initialization */
     boot._started = true;
 
     setLoadingStatus(UI.getLang() === 'ar' ? 'فتح قاعدة البيانات المحلية…' : 'Opening the local database…');
     await global.DB.open(); /* typed errors: blocked / timeout / unavailable */
-    registerServiceWorker();
-
-    setLoadingStatus(UI.getLang() === 'ar' ? 'التحقق من الحساب والصلاحيات…' : 'Checking session & permissions…');
-    /* بوابة الدخول: شاشة تسجيل الدخول أو استعادة الجلسة المحفوظة —
-       لا يُعرض أي بيانات قبل تحديد الدور. مؤقّت التشغيل (15 ثانية)
-       يبدأ فقط بعد حلّ البوابة حتى لا يظهر خطأ وهميًا على شاشة الدخول */
-    if (global.AUTH) {
-      global.AUTH.watchConnection();
-      await global.AUTH.ensureSignedIn();
-    }
-
-    /* belt & braces: even if data loading somehow never settles, show a way
-       out — armed AFTER the login gate so a user reading the login screen
-       never sees a false startup error */
-    let dataLoaded = false;
-    const dataTimer = setTimeout(() => {
-      if (!dataLoaded) showBootError(new Error(
-        UI.getLang() === 'ar'
-          ? 'استغرق تحميل البيانات أكثر من 15 ثانية. أغلق أي تبويبات أخرى للتطبيق ثم أعد المحاولة.'
-          : 'Loading data took longer than 15 seconds. Close other app tabs and retry.'
-      ));
-    }, 15000);
 
     setLoadingStatus(UI.getLang() === 'ar' ? 'تحميل الأصناف والحركات…' : 'Loading products & movements…');
     document.querySelectorAll('.nav-item').forEach((n) => {
@@ -1648,17 +1488,8 @@
     if (backdrop) backdrop.addEventListener('click', closeMobileNav);
 
     await loadAll();
-    applyNavPermissions();
-    renderTopbarUser();
-    if (global.SYNC) {
-      renderSyncChip(global.SYNC.status);
-      global.UI.EventBus.on('sync-status', renderSyncChip);
-      global.SYNC.startAutoSync();
-    }
     document.body.classList.add('loaded');
-    navigate((location.hash || '#' + homeRoute()).replace('#', ''));
-    dataLoaded = true;
-    clearTimeout(dataTimer);
+    navigate((location.hash || '#dashboard').replace('#', ''));
     /* مهاجرات آمنة بعد أول عرض ناجح — لا تحجب التشغيل أبدًا */
     runSafeMigrations().catch((e) => console.warn('[migrations]', e));
 
@@ -1667,8 +1498,31 @@
       if (r && r !== currentRoute) navigate(r);
     });
 
-    /* Service worker مُسجَّل مبكرًا في registerServiceWorker() أعلاه —
-       لا تسجيل ثانٍ هنا (كان يؤخر التثبيت حتى بعد تسجيل الدخول) */
+    /* PWA service worker — registered after the app renders so a slow SW
+       can never block first paint; updates prompt instead of blocking. */
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+      let reloadingForWorker = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloadingForWorker) return;
+        reloadingForWorker = true;
+        location.reload();
+      });
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(async (reg) => {
+        console.log('[sw] registered, scope', reg.scope);
+        /* Check the worker script on every app launch, bypassing HTTP cache. */
+        await reg.update().catch(() => {});
+        if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+              nw.postMessage('SKIP_WAITING');
+            }
+          });
+        });
+      }).catch((e) => console.warn('[sw] registration failed', e));
+    }
 
     /* offline indicator — distinct from database errors */
     const badge = document.getElementById('net-status');
@@ -1720,12 +1574,23 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
-    /* يبدأ مؤقّت حماية تحميل البيانات داخل boot() بعد بوابة الدخول —
-       لا مؤقّت هنا كي لا يظهر خطأ تشغيل وهمي أثناء شاشة تسجيل الدخول */
+    let settled = false;
+    /* belt & braces: even if boot() somehow never settles, show a way out */
+    const startupTimer = setTimeout(() => {
+      if (!settled) showBootError(global.UI.I18N && new Error(
+        UI.getLang() === 'ar'
+          ? 'استغرق بدء التشغيل أكثر من 15 ثانية. أغلق أي تبويبات أخرى للتطبيق ثم أعد المحاولة.'
+          : 'Startup took longer than 15 seconds. Close other app tabs and retry.'
+      ));
+    }, 15000);
     boot().then(() => {
+      settled = true;
+      clearTimeout(startupTimer);
       const loading = document.getElementById('boot-loading');
       if (loading) loading.remove();
     }).catch((error) => {
+      settled = true;
+      clearTimeout(startupTimer);
       showBootError(error);
     });
   });

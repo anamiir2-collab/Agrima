@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v11-cloud-r1';
+const CACHE = 'agrima-v12-incremental-sync-r1';
 
 const PRECACHE = [
   './',

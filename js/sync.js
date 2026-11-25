@@ -189,14 +189,14 @@
       const u = r.updatedAt || r.createdAt || r.at || null;
       if (!u) return false;
       if (r.syncedAt && String(u) <= String(r.syncedAt)) return false;
-      return String(u) > String(lastPushAt || '');
+      return String(u) >= String(lastPushAt || '');
     },
   };
 
   /* ---------------- حالة المزامنة + أحداث الواجهة ---------------- */
   const status = {
     state: 'idle', /* idle | syncing | ok | error | offline */
-    lastSync: null, pending: 0, message: '', online: navigator.onLine,
+    lastSync: null, pending: 0, message: '', online: navigator.onLine, progress: null,
   };
   function setStatus(patch) {
     Object.assign(status, patch);
@@ -220,13 +220,21 @@
 
   /* تعيين sid لكل الصفوف بلا معرف ثابت (إضافي بحت) */
   async function ensureStoreSids(store) {
+    const marker = 'sid-migration-v2:' + store;
+    if (await getSetting(marker, false)) return;
     const rows = await global.DB.getAll(store);
     const changed = SYNC_CORE.ensureSids(rows);
-    if (changed.length) {
-      await global.DB.bulkPut(store, changed);
-      global.console && console.log(`[sync] assigned sids to ${changed.length} ${store}`);
+    let normalized = 0;
+    for (const row of rows) {
+      if (!row.updatedAt) {
+        row.updatedAt = row.createdAt || row.at || nowISO();
+        if (changed.indexOf(row) < 0) changed.push(row);
+        normalized++;
+      }
     }
-    return rows;
+    if (changed.length) await global.DB.bulkPut(store, changed);
+    await setSetting(marker, true);
+    global.console && console.log(`[sync] initialized ${store}: ${changed.length} rows (${normalized} timestamps)`);
   }
 
   /* ---------------- سجل المزامنة ---------------- */
@@ -244,9 +252,23 @@
   /* ================= الدفع (Push) — للمدير فقط ================= */
   async function pushStore(storeName, cfg, lastPushAt, retrySids) {
     const sb = SB.client();
-    const rows = await ensureStoreSids(storeName);
-    const cand = rows.filter((r) =>
+    await ensureStoreSids(storeName);
+    const field = cfg.orderBy === 'at' ? 'at' : 'updatedAt';
+    const range = lastPushAt && typeof IDBKeyRange !== 'undefined'
+      ? IDBKeyRange.lowerBound(lastPushAt, false) : undefined;
+    const indexed = await global.DB.getAllByIndexRange(storeName, field, range);
+    const retryRows = retrySids.size
+      ? await global.DB.getManyByIndex(storeName, 'sid', [...retrySids]) : [];
+    const bySid = new Map();
+    indexed.forEach((r) => { if (r) bySid.set(r.sid || ('local:' + r.id), r); });
+    retryRows.forEach((r) => { if (r && r.sid) bySid.set(r.sid, r); });
+    const cand = [...bySid.values()].filter((r) =>
       SYNC_CORE.isPushCandidate(r, lastPushAt) || retrySids.has(r.sid));
+    const missingSid = cand.filter((r) => !r.sid);
+    if (missingSid.length) {
+      missingSid.forEach((r) => { r.sid = uuid(); });
+      await global.DB.bulkPut(storeName, missingSid);
+    }
     if (!cand.length) return { pushed: 0, failed: 0, failedSids: [] };
     const payload = cand.map(cfg.toRemote);
     const pushedSids = [], failedSids = new Set();
@@ -275,16 +297,30 @@
   async function pushDeletes() {
     const sb = SB.client();
     const tombs = await global.DB.getAll('tombstones');
-    if (!tombs.length) return 0;
-    let ok = 0;
+    if (!tombs.length) return { deleted: 0, failed: 0 };
+    let deleted = 0, failed = 0;
+    const grouped = new Map();
     for (const t of tombs) {
       const cfg = STORES[t.store];
-      if (!cfg) { await global.DB.del('tombstones', t.id); continue; }
-      const { error } = await sb.from(cfg.table).delete().eq('sid', t.sid);
-      if (error) console.error('[sync] delete', t.store, t.sid, error.message);
-      else { await global.DB.del('tombstones', t.id); ok++; }
+      if (!cfg) continue;
+      if (!grouped.has(t.store)) grouped.set(t.store, []);
+      grouped.get(t.store).push(t);
     }
-    return ok;
+    for (const [storeName, rows] of grouped) {
+      const cfg = STORES[storeName];
+      for (let i = 0; i < rows.length; i += 100) {
+        const chunk = rows.slice(i, i + 100);
+        const { error } = await sb.from(cfg.table).delete().in('sid', chunk.map((r) => r.sid));
+        if (error) {
+          failed += chunk.length;
+          console.error('[sync] batch delete', storeName, error.message);
+          continue;
+        }
+        await global.DB.bulkDel('tombstones', chunk.map((r) => r.id));
+        deleted += chunk.length;
+      }
+    }
+    return { deleted, failed };
   }
 
   /* ================= السحب (Pull) ================= */
@@ -306,11 +342,12 @@
     if (!remoteRows.length) return { applied: 0, conflicts: 0 };
 
     /* عظام القبر: السجلات المحذوفة محليًا لا تعود من السحابة */
-    const tombs = await global.DB.getAll('tombstones');
-    const deadSids = new Set(tombs.filter((t) => t.store === storeName).map((t) => t.sid));
+    const tombs = await global.DB.getAllByIndexRange('tombstones', 'store', IDBKeyRange.only(storeName));
+    const deadSids = new Set(tombs.map((t) => t.sid));
     const alive = remoteRows.filter((r) => !deadSids.has(r.sid));
 
-    const localRows = await global.DB.getAll(storeName);
+    const localRows = (await global.DB.getManyByIndex(storeName, 'sid', alive.map((r) => r.sid)))
+      .filter(Boolean);
     const { apply, conflicts, pushes } = SYNC_CORE.mergePull(localRows, alive, { dirtySids: new Set() });
     if (apply.length) {
       /* الصفوف السحابية تُخزن محليًا مع الحفاظ على مفتاحها المحلي القائم —
@@ -350,8 +387,8 @@
     const sb = SB.client();
     const { data, error } = await sb.rpc('app_recent_out_rows');
     if (error) throw error;
-    const localRows = await global.DB.getAll('transactions');
-    const bySid = new Map(localRows.filter((r) => r.sid).map((r) => [r.sid, r]));
+    const bySidRows = await global.DB.getManyByIndex('transactions', 'sid', (data || []).map((r) => r.sid));
+    const bySid = new Map(bySidRows.filter(Boolean).map((r) => [r.sid, r]));
     const toWrite = [];
     for (const r of data || []) {
       if (bySid.has(r.sid)) continue; /* موجود محليًا — لا تكرار */
@@ -384,54 +421,59 @@
   }
 
   /* ================= الجلسة الكاملة ================= */
-  let _running = false;
+  let _running = false, _queued = false;
   async function run(opts) {
     const warehouse = PERM.isWarehouse();
     const sb = SB.client();
-    if (_running) return { skipped: 'busy' };
+    if (_running) { _queued = true; return { skipped: 'queued' }; }
     if (!sb) return { skipped: 'no-lib' };
     if (!PERM.signedIn() && !warehouse) return { skipped: 'not-signed-in' };
     if (!status.online) { setStatus({ state: 'offline', message: 'غير متصل — البيانات محفوظة محليًا' }); return { skipped: 'offline' }; }
     _running = true;
-    setStatus({ state: 'syncing', message: 'جارٍ المزامنة…' });
+    setStatus({ state: 'syncing', message: 'جارٍ المزامنة…', progress: { completed: 0, total: warehouse ? 6 : 13, phase: 'pull' } });
     const startedAt = nowISO();
     const logs = [];
-    let ok = true;
+    let ok = true, changedLocal = false;
     try {
       /* تأكد من وجود متاجر المزامنة (ترحيل v4) */
       await global.DB.open();
 
       /* ---------- أمين المخزن: سحب + رفع أذونه المحلية فقط ---------- */
       if (warehouse) {
-        const nb = await pullKeeperStock();
-        const ntx = await pullKeeperRecentOutRows();
-        const np = await pullStore('permits', STORES.permits, await getSetting('pull:permits', null));
-        const nr = await pullStore('reels', STORES.reels, await getSetting('pull:reels', null));
-        const nro = await pullStore('rolls', STORES.rolls, await getSetting('pull:rolls', null));
-        await setSetting('pull:permits', startedAt);
-        await setSetting('pull:reels', startedAt);
-        await setSetting('pull:rolls', startedAt);
+        const [nb, ntx, np, nr, nro] = await Promise.all([
+          pullKeeperStock(), pullKeeperRecentOutRows(),
+          pullStore('permits', STORES.permits, await getSetting('pull:permits', null)),
+          pullStore('reels', STORES.reels, await getSetting('pull:reels', null)),
+          pullStore('rolls', STORES.rolls, await getSetting('pull:rolls', null)),
+        ]);
+        await Promise.all(['permits', 'reels', 'rolls'].map((name) => setSetting('pull:' + name, startedAt)));
+        setStatus({ progress: { completed: 5, total: 6, phase: 'pull' } });
         /* رفع أذون الصرف أنشئت على هذا الجهاز ولم تُرفع بعد (مسودات أمين
            المخزن). RLS يسمح بالإدراج داخل نافذة اليومين فقط والفشل يعاد
            تلقائيًا في الدورة التالية — لا يُعتبر السجل متزامنًا قبل تأكيد
            الحفظ في Supabase (العلّم بالـ syncedAt يحدث بعد نجاح الرفع فقط). */
         let pushedPermits = 0, failedPermits = 0;
         try {
-          const res = await pushStore('permits', STORES.permits, null, new Set());
+          const lastPush = await getSetting('push:permits', null);
+          const res = await pushStore('permits', STORES.permits, lastPush, new Set());
           pushedPermits = res.pushed; failedPermits = res.failed;
+          if (res.failed === 0) await setSetting('push:permits', startedAt);
+          else ok = false;
           logs.push({ direction: 'push', store: 'permits', rows: res.pushed, ok: res.failed === 0, message: res.failed ? `${res.failed} فشل` : null });
         } catch (e) {
           ok = false;
           logs.push({ direction: 'push', store: 'permits', rows: 0, ok: false, message: e.message });
         }
-        await setSetting('lastSyncAt', startedAt);
+        if (ok && failedPermits === 0) await setSetting('lastSyncAt', nowISO());
+        const lastSuccessfulSync = await getSetting('lastSyncAt', null);
         const purged = await purgeKeeperWindow();
+        setStatus({ progress: { completed: 6, total: 6, phase: 'done' } });
         setStatus({
-          state: failedPermits ? 'error' : 'ok',
-          lastSync: startedAt,
+          state: ok && failedPermits === 0 ? 'ok' : 'error',
+          lastSync: lastSuccessfulSync,
           pending: failedPermits,
-          message: failedPermits
-            ? 'فشل رفع بعض الأذون — سيعاد تلقائيًا'
+          message: !ok || failedPermits
+            ? 'فشل جزء من المزامنة — سيعاد تلقائيًا'
             : `تم تحديث الرصيد وأذون اليومين${pushedPermits ? ` — رفع ${pushedPermits} إذن` : ''}`,
         });
         logs.push({ direction: 'pull', store: 'stock', rows: nb + ntx, ok: true });
@@ -442,56 +484,75 @@
 
       /* ---------- المدير: سحب ثم دفع ---------- */
       let pending = 0, conflictsTotal = 0;
-      for (const storeName of ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions']) {
+      const pullNames = ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions'];
+      let progressDone = 0;
+      await Promise.all(pullNames.map(async (storeName) => {
         const cfg = STORES[storeName];
         const lastPull = await getSetting('pull:' + storeName, null);
         try {
           const res = await pullStore(storeName, cfg, lastPull);
           conflictsTotal += res.conflicts || 0;
+          if (res.applied) changedLocal = true;
           await setSetting('pull:' + storeName, startedAt);
           logs.push({ direction: 'pull', store: storeName, rows: res.applied || 0, ok: true });
         } catch (e) {
           ok = false;
           logs.push({ direction: 'pull', store: storeName, rows: 0, ok: false, message: e.message });
           console.error('[sync] pull failed', storeName, e);
+        } finally {
+          progressDone++;
+          setStatus({ progress: { completed: progressDone, total: 13, phase: 'pull' } });
         }
-      }
+      }));
 
       const retryRaw = await getSetting('retry:sids', []);
       const retrySids = new Set(Array.isArray(retryRaw) ? retryRaw : []);
 
       let pushedTotal = 0, failedTotal = 0, delTotal = 0;
       const newRetry = [];
-      for (const storeName of ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions', 'audit']) {
+      const pushNames = ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions', 'audit'];
+      let pushDone = 0;
+      await Promise.all(pushNames.map(async (storeName) => {
         const cfg = STORES[storeName];
-        if (!cfg || !cfg.toRemote) continue;
+        if (!cfg || !cfg.toRemote) return;
         const lastPush = await getSetting('push:' + storeName, null);
         try {
           const res = await pushStore(storeName, cfg, lastPush, retrySids);
           pushedTotal += res.pushed; failedTotal += res.failed;
           (res.failedSids || []).forEach((sid) => newRetry.push(sid));
+          if (res.failed === 0) await setSetting('push:' + storeName, startedAt);
+          else ok = false;
           logs.push({ direction: 'push', store: storeName, rows: res.pushed, ok: res.failed === 0, message: res.failed ? `${res.failed} فشل` : null });
         } catch (e) {
           ok = false;
           logs.push({ direction: 'push', store: storeName, rows: 0, ok: false, message: e.message });
+        } finally {
+          pushDone++;
+          setStatus({ progress: { completed: 6 + pushDone, total: 13, phase: 'push' } });
         }
-        await setSetting('push:' + storeName, startedAt);
-      }
+      }));
       try {
-        delTotal = await pushDeletes();
-        logs.push({ direction: 'push', store: 'tombstones', rows: delTotal, ok: true });
+        const del = await pushDeletes();
+        delTotal = del.deleted;
+        if (del.failed) ok = false;
+        logs.push({ direction: 'push', store: 'tombstones', rows: del.deleted, ok: del.failed === 0, message: del.failed ? `${del.failed} فشل` : null });
       } catch (e) {
         ok = false;
         logs.push({ direction: 'push', store: 'tombstones', rows: 0, ok: false, message: e.message });
       }
       await setSetting('retry:sids', newRetry);
-      await setSetting('lastSyncAt', startedAt);
 
-      const tombCount = (await global.DB.getAll('tombstones')).length;
+      const tombCount = await global.DB.count('tombstones');
+      const completedAt = nowISO();
+      if (ok && failedTotal === 0 && tombCount === 0 && newRetry.length === 0) {
+        await setSetting('lastSyncAt', completedAt);
+      }
+      const lastSuccessfulSync = await getSetting('lastSyncAt', null);
       setStatus({
         state: ok ? 'ok' : 'error',
-        lastSync: startedAt,
+        lastSync: lastSuccessfulSync,
         pending: tombCount + newRetry.length,
+        progress: { completed: 13, total: 13, phase: 'done' },
         message: ok
           ? `تمت المزامنة${pushedTotal ? ` — رفع ${pushedTotal} سجل` : ''}${delTotal ? ` — حذف ${delTotal}` : ''}${conflictsTotal ? ` — ${conflictsTotal} تعارض حُلَّ بالأحدث` : ''}`
           : 'فشل جزء من المزامنة — سيعاد تلقائيًا',
@@ -505,8 +566,12 @@
     } finally {
       _running = false;
       try {
-        global.App && global.App.refresh && !PERM.isWarehouse() && global.App.refresh();
+        global.App && global.App.refresh && changedLocal && !PERM.isWarehouse() && global.App.refresh();
       } catch (e) { /* noop */ }
+      if (_queued) {
+        _queued = false;
+        setTimeout(() => run({ queued: true }).catch(() => {}), 250);
+      }
     }
   }
 
@@ -533,9 +598,10 @@
     try {
       _rtChannel = sb.channel('agrima-changes')
         .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-          if (!status.online || _running || !PERM.signedIn()) return;
+          if (!status.online || !PERM.signedIn()) return;
+          if (_running) { _queued = true; return; }
           clearTimeout(_rtTimer);
-          _rtTimer = setTimeout(() => run().catch(() => {}), 1500);
+          _rtTimer = setTimeout(() => run().catch(() => {}), 1800);
         })
         .subscribe((s) => {
           if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') { try { sb.removeChannel(_rtChannel); } catch (e2) { /* noop */ } _rtChannel = null; }

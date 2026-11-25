@@ -2,7 +2,7 @@
    tests/test-sync-cloud.js — Agrima v11 cloud-layer test suite (Node)
    Run:  npm test  &&  npm run test:sync   (uses fake-indexeddb, no browser)
    Covers:
-     • DB v3→v4 additive migration (tombstones / stockview created,
+     • DB v4→v5 additive migration (tombstones / stockview created,
        existing records untouched)
      • SYNC_CORE.mergePull conflict rules (newest wins, dirty-local wins,
        no resurrect via tombstones is push-side, duplicates impossible
@@ -21,7 +21,7 @@ if (!globalThis.crypto || !globalThis.crypto.randomUUID) {
 
 require('../js/calculations.js');
 require('../js/ui.js');
-require('../js/database.js');     // → global DB (DB_VERSION 4)
+require('../js/database.js');     // → global DB (DB_VERSION 5)
 require('../js/permissions.js');  // → global PERM
 const SYNC = require('../js/sync.js'); // → SYNC_CORE + STORES (browser parts skipped)
 const DB = globalThis.DB;
@@ -48,9 +48,9 @@ function eq(a, b, msg) {
 
 (async () => {
   /* ================================================================
-     1) DB v4: الترحيل الإضافي — متاجر جديدة تُنشأ وبيانات قديمة تبقى
+     1) DB v5: الترحيل الإضافي — متاجر جديدة تُنشأ وبيانات قديمة تبقى
      ================================================================ */
-  await test('DB v4: upgrade creates tombstones + stockview stores', async () => {
+  await test('DB v5: upgrade creates tombstones + stockview stores', async () => {
     await DB.open();
     // no exception + we can write and read both stores
     await DB.bulkPut('tombstones', [{ id: 'products|x1', store: 'products', sid: 'x1', at: new Date().toISOString() }]);
@@ -61,7 +61,39 @@ function eq(a, b, msg) {
     assert(s && s.net === 7, 'stockview row missing');
   });
 
-  await test('DB v4: existing v3 stores and sequences survive the upgrade', async () => {
+  await test('DB v5: sync indexes and indexed reads are available', async () => {
+    const db = await DB.open();
+    for (const name of ['products', 'transactions', 'rolls', 'reels', 'permits', 'customers', 'audit']) {
+      const tx = db.transaction(name, 'readonly');
+      const store = tx.objectStore(name);
+      assert(store.indexNames.contains('sid'), name + ' sid index missing');
+      assert(store.indexNames.contains('updatedAt'), name + ' updatedAt index missing');
+    }
+    const now = new Date().toISOString();
+    const id = await DB.add('transactions', { sid: 'idx-sync-test', createdAt: now, updatedAt: now });
+    const found = await DB.getManyByIndex('transactions', 'sid', ['idx-sync-test']);
+    eq(found[0].id, id, 'indexed sid lookup');
+    const recent = await DB.getAllByIndexRange('transactions', 'updatedAt', IDBKeyRange.lowerBound(now, false));
+    assert(recent.some((row) => row.sid === 'idx-sync-test'), 'updatedAt index range misses row');
+    await DB.del('transactions', id);
+  });
+
+  await test('DB v5: direct and atomic deletes create tombstones', async () => {
+    const id1 = await DB.add('customers', { sid: 'customer-delete-test', name: 'test', createdAt: new Date().toISOString() });
+    await DB.del('customers', id1);
+    const t1 = await DB.get('tombstones', 'customers|customer-delete-test');
+    assert(t1 && t1.sid === 'customer-delete-test', 'DB.del tombstone missing');
+
+    const id2 = await DB.add('transactions', { sid: 'atomic-delete-test', createdAt: new Date().toISOString() });
+    await DB.atomic(['transactions', 'audit'], (t) => {
+      t.objectStore('transactions').delete(id2);
+      return true;
+    });
+    const t2 = await DB.get('tombstones', 'transactions|atomic-delete-test');
+    assert(t2 && t2.sid === 'atomic-delete-test', 'atomic delete tombstone missing');
+  });
+
+  await test('DB v5: existing v3 stores and sequences survive the upgrade', async () => {
     // write a real movement + settings, reopen (simulated by re-use) and verify
     await DB.setSetting('docSeqTax', 42);
     const id = await DB.add('transactions', { date: '2026-11-01', quality: 'توب لاينر', gsm: '125', size: '100', customer: 'عميل', addQty: 5, outQty: 0, createdAt: new Date().toISOString() });

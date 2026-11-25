@@ -274,7 +274,12 @@
     count: (store) => tx(store, 'readonly', (st) => st.count()),
     put: (store, val) => tx(store, 'readwrite', (st) => st.put(val)),
     add: (store, val) => tx(store, 'readwrite', (st) => st.add(val)),
-    del: (store, key) => tx(store, 'readwrite', (st) => st.delete(key)),
+    del(store, key) {
+      if (['products', 'transactions', 'rolls', 'reels', 'permits', 'customers'].includes(store)) {
+        return DB.atomic([store], (t) => { t.objectStore(store).delete(key); return true; });
+      }
+      return tx(store, 'readwrite', (st) => st.delete(key));
+    },
     bulkDel(store, keys) {
       if (!keys || !keys.length) return Promise.resolve(0);
       return open().then((db) => new Promise((resolve, reject) => {
@@ -286,7 +291,23 @@
         t.onabort = () => reject(t.error || new Error('IndexedDB delete aborted'));
       }));
     },
-    clear: (store) => tx(store, 'readwrite', (st) => st.clear()),
+    clear(store) {
+      if (['products', 'transactions', 'rolls', 'reels', 'permits', 'customers'].includes(store)) {
+        return DB.atomic([store], (t) => {
+          const st = t.objectStore(store);
+          const req = st.getAll();
+          req.onsuccess = () => {
+            const tomb = t.objectStore('tombstones');
+            (req.result || []).forEach((row) => {
+              if (row.sid) tomb.put({ id: store + '|' + row.sid, store, sid: row.sid, at: new Date().toISOString() });
+            });
+            st.clear();
+          };
+          return true;
+        });
+      }
+      return tx(store, 'readwrite', (st) => st.clear());
+    },
 
     /* Atomic bulk import: runs inside ONE IndexedDB transaction so a failure
        rolls everything back (no partial imports). */
@@ -309,12 +330,49 @@
     atomic(storeNames, workFn) {
       return open().then((db) => new Promise((resolve, reject) => {
         let t;
+        const requested = Array.isArray(storeNames) ? storeNames.slice() : [storeNames];
+        const syncable = new Set(['products', 'transactions', 'rolls', 'reels', 'permits', 'customers']);
+        const trackDeletes = requested.some((name) => syncable.has(name));
+        const scope = trackDeletes && requested.indexOf('tombstones') < 0
+          ? requested.concat('tombstones') : requested;
         try {
-          t = db.transaction(storeNames, 'readwrite');
+          t = db.transaction(scope, 'readwrite');
         } catch (err) { reject(err); return; }
         let result = null, fail = null;
+        /* Wrap only objectStore.delete calls made inside atomic workflows.
+           The original row and its tombstone are written in the SAME IDB
+           transaction, so an interrupted delete cannot resurrect remotely. */
+        const facade = new Proxy(t, {
+          get(target, prop) {
+            if (prop === 'objectStore') return (name) => {
+              const store = target.objectStore(name);
+              if (!syncable.has(name)) return store;
+              return new Proxy(store, {
+                get(st, method) {
+                  if (method === 'delete') return (key) => {
+                    const getReq = st.get(key);
+                    getReq.onsuccess = () => {
+                      const row = getReq.result;
+                      if (row && row.sid) {
+                        target.objectStore('tombstones').put({
+                          id: name + '|' + row.sid, store: name, sid: row.sid,
+                          at: new Date().toISOString(),
+                        });
+                      }
+                    };
+                    return st.delete(key);
+                  };
+                  const value = Reflect.get(st, method, st);
+                  return typeof value === 'function' ? value.bind(st) : value;
+                },
+              });
+            };
+            const value = Reflect.get(target, prop, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
         try {
-          result = workFn(t, (e) => { fail = e || fail; });
+          result = workFn(facade, (e) => { fail = e || fail; });
         } catch (err) {
           fail = err;
           try { t.abort(); } catch (e2) { /* already aborted */ }

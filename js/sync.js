@@ -220,13 +220,21 @@
 
   /* تعيين sid لكل الصفوف بلا معرف ثابت (إضافي بحت) */
   async function ensureStoreSids(store) {
+    const marker = 'sid-migration-v2:' + store;
+    if (await getSetting(marker, false)) return;
     const rows = await global.DB.getAll(store);
     const changed = SYNC_CORE.ensureSids(rows);
-    if (changed.length) {
-      await global.DB.bulkPut(store, changed);
-      global.console && console.log(`[sync] assigned sids to ${changed.length} ${store}`);
+    let normalized = 0;
+    for (const row of rows) {
+      if (!row.updatedAt) {
+        row.updatedAt = row.createdAt || row.at || nowISO();
+        if (changed.indexOf(row) < 0) changed.push(row);
+        normalized++;
+      }
     }
-    return rows;
+    if (changed.length) await global.DB.bulkPut(store, changed);
+    await setSetting(marker, true);
+    global.console && console.log(`[sync] initialized ${store}: ${changed.length} rows (${normalized} timestamps)`);
   }
 
   /* ---------------- سجل المزامنة ---------------- */
@@ -244,8 +252,17 @@
   /* ================= الدفع (Push) — للمدير فقط ================= */
   async function pushStore(storeName, cfg, lastPushAt, retrySids) {
     const sb = SB.client();
-    const rows = await ensureStoreSids(storeName);
-    const cand = rows.filter((r) =>
+    await ensureStoreSids(storeName);
+    const field = cfg.orderBy === 'at' ? 'at' : 'updatedAt';
+    const range = lastPushAt && typeof IDBKeyRange !== 'undefined'
+      ? IDBKeyRange.lowerBound(lastPushAt, true) : undefined;
+    const indexed = await global.DB.getAllByIndexRange(storeName, field, range);
+    const retryRows = retrySids.size
+      ? await global.DB.getManyByIndex(storeName, 'sid', [...retrySids]) : [];
+    const bySid = new Map();
+    indexed.forEach((r) => { if (r && r.sid) bySid.set(r.sid, r); });
+    retryRows.forEach((r) => { if (r && r.sid) bySid.set(r.sid, r); });
+    const cand = [...bySid.values()].filter((r) =>
       SYNC_CORE.isPushCandidate(r, lastPushAt) || retrySids.has(r.sid));
     if (!cand.length) return { pushed: 0, failed: 0, failedSids: [] };
     const payload = cand.map(cfg.toRemote);
@@ -275,16 +292,30 @@
   async function pushDeletes() {
     const sb = SB.client();
     const tombs = await global.DB.getAll('tombstones');
-    if (!tombs.length) return 0;
-    let ok = 0;
+    if (!tombs.length) return { deleted: 0, failed: 0 };
+    let deleted = 0, failed = 0;
+    const grouped = new Map();
     for (const t of tombs) {
       const cfg = STORES[t.store];
-      if (!cfg) { await global.DB.del('tombstones', t.id); continue; }
-      const { error } = await sb.from(cfg.table).delete().eq('sid', t.sid);
-      if (error) console.error('[sync] delete', t.store, t.sid, error.message);
-      else { await global.DB.del('tombstones', t.id); ok++; }
+      if (!cfg) continue;
+      if (!grouped.has(t.store)) grouped.set(t.store, []);
+      grouped.get(t.store).push(t);
     }
-    return ok;
+    for (const [storeName, rows] of grouped) {
+      const cfg = STORES[storeName];
+      for (let i = 0; i < rows.length; i += 100) {
+        const chunk = rows.slice(i, i + 100);
+        const { error } = await sb.from(cfg.table).delete().in('sid', chunk.map((r) => r.sid));
+        if (error) {
+          failed += chunk.length;
+          console.error('[sync] batch delete', storeName, error.message);
+          continue;
+        }
+        await global.DB.bulkDel('tombstones', chunk.map((r) => r.id));
+        deleted += chunk.length;
+      }
+    }
+    return { deleted, failed };
   }
 
   /* ================= السحب (Pull) ================= */
@@ -306,11 +337,12 @@
     if (!remoteRows.length) return { applied: 0, conflicts: 0 };
 
     /* عظام القبر: السجلات المحذوفة محليًا لا تعود من السحابة */
-    const tombs = await global.DB.getAll('tombstones');
-    const deadSids = new Set(tombs.filter((t) => t.store === storeName).map((t) => t.sid));
+    const tombs = await global.DB.getAllByIndexRange('tombstones', 'store', IDBKeyRange.only(storeName));
+    const deadSids = new Set(tombs.map((t) => t.sid));
     const alive = remoteRows.filter((r) => !deadSids.has(r.sid));
 
-    const localRows = await global.DB.getAll(storeName);
+    const localRows = (await global.DB.getManyByIndex(storeName, 'sid', alive.map((r) => r.sid)))
+      .filter(Boolean);
     const { apply, conflicts, pushes } = SYNC_CORE.mergePull(localRows, alive, { dirtySids: new Set() });
     if (apply.length) {
       /* الصفوف السحابية تُخزن محليًا مع الحفاظ على مفتاحها المحلي القائم —
@@ -487,7 +519,7 @@
       await setSetting('retry:sids', newRetry);
       await setSetting('lastSyncAt', startedAt);
 
-      const tombCount = (await global.DB.getAll('tombstones')).length;
+      const tombCount = (await global.DB.count('tombstones'));
       setStatus({
         state: ok ? 'ok' : 'error',
         lastSync: startedAt,

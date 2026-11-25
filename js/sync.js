@@ -260,10 +260,15 @@
     const retryRows = retrySids.size
       ? await global.DB.getManyByIndex(storeName, 'sid', [...retrySids]) : [];
     const bySid = new Map();
-    indexed.forEach((r) => { if (r && r.sid) bySid.set(r.sid, r); });
+    indexed.forEach((r) => { if (r) bySid.set(r.sid || ('local:' + r.id), r); });
     retryRows.forEach((r) => { if (r && r.sid) bySid.set(r.sid, r); });
     const cand = [...bySid.values()].filter((r) =>
       SYNC_CORE.isPushCandidate(r, lastPushAt) || retrySids.has(r.sid));
+    const missingSid = cand.filter((r) => !r.sid);
+    if (missingSid.length) {
+      missingSid.forEach((r) => { r.sid = uuid(); });
+      await global.DB.bulkPut(storeName, missingSid);
+    }
     if (!cand.length) return { pushed: 0, failed: 0, failedSids: [] };
     const payload = cand.map(cfg.toRemote);
     const pushedSids = [], failedSids = new Set();

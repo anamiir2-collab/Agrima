@@ -1536,7 +1536,8 @@
         : 'sync-ok';
       chip.className = 'sync-chip ' + cls;
       const ar = UI.getLang() === 'ar';
-      txt.textContent = s.state === 'syncing' ? (ar ? 'جارٍ المزامنة…' : 'Syncing…')
+      txt.textContent = s.state === 'syncing'
+        ? (s.progress && s.progress.total ? (ar ? `جارٍ المزامنة ${s.progress.completed}/${s.progress.total}` : `Syncing ${s.progress.completed}/${s.progress.total}`) : (ar ? 'جارٍ المزامنة…' : 'Syncing…'))
         : s.state === 'error' ? (ar ? 'فشل المزامنة' : 'Sync failed')
         : !s.online ? (ar ? 'غير متصل' : 'Offline')
         : s.state === 'ok' ? (s.lastSync ? new Date(s.lastSync).toLocaleTimeString('en-GB') : (ar ? 'متماثلة' : 'Synced'))

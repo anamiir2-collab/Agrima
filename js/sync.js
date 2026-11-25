@@ -196,7 +196,7 @@
   /* ---------------- حالة المزامنة + أحداث الواجهة ---------------- */
   const status = {
     state: 'idle', /* idle | syncing | ok | error | offline */
-    lastSync: null, pending: 0, message: '', online: navigator.onLine,
+    lastSync: null, pending: 0, message: '', online: navigator.onLine, progress: null,
   };
   function setStatus(patch) {
     Object.assign(status, patch);
@@ -421,16 +421,16 @@
   }
 
   /* ================= الجلسة الكاملة ================= */
-  let _running = false;
+  let _running = false, _queued = false, _rtTimer = null;
   async function run(opts) {
     const warehouse = PERM.isWarehouse();
     const sb = SB.client();
-    if (_running) return { skipped: 'busy' };
+    if (_running) { _queued = true; return { skipped: 'queued' }; }
     if (!sb) return { skipped: 'no-lib' };
     if (!PERM.signedIn() && !warehouse) return { skipped: 'not-signed-in' };
     if (!status.online) { setStatus({ state: 'offline', message: 'غير متصل — البيانات محفوظة محليًا' }); return { skipped: 'offline' }; }
     _running = true;
-    setStatus({ state: 'syncing', message: 'جارٍ المزامنة…' });
+    setStatus({ state: 'syncing', message: 'جارٍ المزامنة…', progress: { completed: 0, total: warehouse ? 6 : 13, phase: 'pull' } });
     const startedAt = nowISO();
     const logs = [];
     let ok = true;
@@ -479,7 +479,9 @@
 
       /* ---------- المدير: سحب ثم دفع ---------- */
       let pending = 0, conflictsTotal = 0;
-      for (const storeName of ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions']) {
+      const pullNames = ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions'];
+      let progressDone = 0;
+      await Promise.all(pullNames.map(async (storeName) => {
         const cfg = STORES[storeName];
         const lastPull = await getSetting('pull:' + storeName, null);
         try {
@@ -491,44 +493,56 @@
           ok = false;
           logs.push({ direction: 'pull', store: storeName, rows: 0, ok: false, message: e.message });
           console.error('[sync] pull failed', storeName, e);
+        } finally {
+          progressDone++;
+          setStatus({ progress: { completed: progressDone, total: 13, phase: 'pull' } });
         }
-      }
+      }));
 
       const retryRaw = await getSetting('retry:sids', []);
       const retrySids = new Set(Array.isArray(retryRaw) ? retryRaw : []);
 
       let pushedTotal = 0, failedTotal = 0, delTotal = 0;
       const newRetry = [];
-      for (const storeName of ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions', 'audit']) {
+      const pushNames = ['products', 'rolls', 'reels', 'permits', 'customers', 'transactions', 'audit'];
+      await Promise.all(pushNames.map(async (storeName) => {
         const cfg = STORES[storeName];
-        if (!cfg || !cfg.toRemote) continue;
+        if (!cfg || !cfg.toRemote) return;
         const lastPush = await getSetting('push:' + storeName, null);
         try {
           const res = await pushStore(storeName, cfg, lastPush, retrySids);
           pushedTotal += res.pushed; failedTotal += res.failed;
           (res.failedSids || []).forEach((sid) => newRetry.push(sid));
+          if (res.failed === 0) await setSetting('push:' + storeName, startedAt);
+          else ok = false;
           logs.push({ direction: 'push', store: storeName, rows: res.pushed, ok: res.failed === 0, message: res.failed ? `${res.failed} فشل` : null });
         } catch (e) {
           ok = false;
           logs.push({ direction: 'push', store: storeName, rows: 0, ok: false, message: e.message });
         }
-        await setSetting('push:' + storeName, startedAt);
-      }
+      }));
       try {
-        delTotal = await pushDeletes();
-        logs.push({ direction: 'push', store: 'tombstones', rows: delTotal, ok: true });
+        const del = await pushDeletes();
+        delTotal = del.deleted;
+        if (del.failed) ok = false;
+        logs.push({ direction: 'push', store: 'tombstones', rows: del.deleted, ok: del.failed === 0, message: del.failed ? `${del.failed} فشل` : null });
       } catch (e) {
         ok = false;
         logs.push({ direction: 'push', store: 'tombstones', rows: 0, ok: false, message: e.message });
       }
       await setSetting('retry:sids', newRetry);
-      await setSetting('lastSyncAt', startedAt);
 
-      const tombCount = (await global.DB.count('tombstones'));
+      const tombCount = await global.DB.count('tombstones');
+      const completedAt = nowISO();
+      if (ok && failedTotal === 0 && tombCount === 0 && newRetry.length === 0) {
+        await setSetting('lastSyncAt', completedAt);
+      }
+      const lastSuccessfulSync = await getSetting('lastSyncAt', null);
       setStatus({
         state: ok ? 'ok' : 'error',
-        lastSync: startedAt,
+        lastSync: lastSuccessfulSync,
         pending: tombCount + newRetry.length,
+        progress: { completed: 13, total: 13, phase: 'done' },
         message: ok
           ? `تمت المزامنة${pushedTotal ? ` — رفع ${pushedTotal} سجل` : ''}${delTotal ? ` — حذف ${delTotal}` : ''}${conflictsTotal ? ` — ${conflictsTotal} تعارض حُلَّ بالأحدث` : ''}`
           : 'فشل جزء من المزامنة — سيعاد تلقائيًا',
@@ -544,6 +558,10 @@
       try {
         global.App && global.App.refresh && !PERM.isWarehouse() && global.App.refresh();
       } catch (e) { /* noop */ }
+      if (_queued) {
+        _queued = false;
+        setTimeout(() => run({ queued: true }).catch(() => {}), 250);
+      }
     }
   }
 
@@ -563,16 +581,17 @@
      اشتراك في بث Supabase (يحترم RLS تلقائيًا) — أي إضافة/تعديل/حذف في
      السحابة يستدعي مزامنة فورية بعد تجميع الأحداث المتتالية (debounce).
      إن تعذر البث تبقى المزامنة الدورية كل دقيقتين كما هي. */
-  let _rtChannel = null, _rtTimer = null;
+  let _rtChannel = null;
   function startRealtime() {
     const sb = SB.client();
     if (!sb || _rtChannel || typeof window === 'undefined') return;
     try {
       _rtChannel = sb.channel('agrima-changes')
         .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-          if (!status.online || _running || !PERM.signedIn()) return;
+          if (!status.online || !PERM.signedIn()) return;
+          if (_running) { _queued = true; return; }
           clearTimeout(_rtTimer);
-          _rtTimer = setTimeout(() => run().catch(() => {}), 1500);
+          _rtTimer = setTimeout(() => run().catch(() => {}), 1800);
         })
         .subscribe((s) => {
           if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') { try { sb.removeChannel(_rtChannel); } catch (e2) { /* noop */ } _rtChannel = null; }

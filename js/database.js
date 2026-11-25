@@ -67,7 +67,7 @@
      The upgrade handler below ONLY creates object stores & indexes —
      existing stores, keys and records are never read, rewritten or deleted,
      so upgrading a live user database is purely additive (safe migration). */
-  const DB_VERSION = 4;
+  const DB_VERSION = 5;
 
   let _db = null;
   let _openPromise = null;
@@ -190,6 +190,18 @@
         if (!db.objectStoreNames.contains('stockview')) {
           db.createObjectStore('stockview', { keyPath: 'key' });
         }
+        /* v5 sync indexes: additive only. Existing rows and object stores remain untouched. */
+        ['products', 'transactions', 'rolls', 'reels', 'permits', 'customers', 'audit'].forEach((name) => {
+          if (!db.objectStoreNames.contains(name)) return;
+          const s = e.target.transaction.objectStore(name);
+          if (!s.indexNames.contains('sid')) s.createIndex('sid', 'sid', { unique: false });
+          if (!s.indexNames.contains('updatedAt')) s.createIndex('updatedAt', 'updatedAt', { unique: false });
+          if (!s.indexNames.contains('createdAt')) s.createIndex('createdAt', 'createdAt', { unique: false });
+        });
+        if (db.objectStoreNames.contains('tombstones')) {
+          const ts = e.target.transaction.objectStore('tombstones');
+          if (!ts.indexNames.contains('store')) ts.createIndex('store', 'store', { unique: false });
+        }
       };
       req.onsuccess = () => {
         _db = req.result;
@@ -240,11 +252,40 @@
   const DB = {
     open,
     getAll: (store) => tx(store, 'readonly', (st) => st.getAll()),
+    getAllByIndexRange(store, indexName, range) {
+      return tx(store, 'readonly', (st) => st.index(indexName).getAll(range));
+    },
+    getManyByIndex(store, indexName, keys) {
+      if (!keys || !keys.length) return Promise.resolve([]);
+      return open().then((db) => new Promise((resolve, reject) => {
+        const t = db.transaction(store, 'readonly');
+        const idx = t.objectStore(store).index(indexName);
+        const out = new Array(keys.length);
+        let left = keys.length;
+        keys.forEach((key, i) => {
+          const req = idx.get(key);
+          req.onsuccess = () => { out[i] = req.result || null; if (--left === 0) resolve(out); };
+          req.onerror = () => reject(req.error || t.error);
+        });
+        t.onabort = () => reject(t.error || new Error('IndexedDB read aborted'));
+      }));
+    },
     get: (store, key) => tx(store, 'readonly', (st) => st.get(key)),
     count: (store) => tx(store, 'readonly', (st) => st.count()),
     put: (store, val) => tx(store, 'readwrite', (st) => st.put(val)),
     add: (store, val) => tx(store, 'readwrite', (st) => st.add(val)),
     del: (store, key) => tx(store, 'readwrite', (st) => st.delete(key)),
+    bulkDel(store, keys) {
+      if (!keys || !keys.length) return Promise.resolve(0);
+      return open().then((db) => new Promise((resolve, reject) => {
+        const t = db.transaction(store, 'readwrite');
+        const st = t.objectStore(store);
+        keys.forEach((key) => st.delete(key));
+        t.oncomplete = () => resolve(keys.length);
+        t.onerror = () => reject(t.error);
+        t.onabort = () => reject(t.error || new Error('IndexedDB delete aborted'));
+      }));
+    },
     clear: (store) => tx(store, 'readwrite', (st) => st.clear()),
 
     /* Atomic bulk import: runs inside ONE IndexedDB transaction so a failure

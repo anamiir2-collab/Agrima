@@ -240,7 +240,7 @@
       const email = node.querySelector('#nu-email').value.trim().toLowerCase();
       const role = node.querySelector('#nu-role').value;
       const password = node.querySelector('#nu-pass').value;
-      if (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) { errBox.textContent = 'أدخل بريدًا إلكترونيًا صحيحًا'; return; }
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errBox.textContent = 'أدخل بريدًا إلكترونيًا صحيحًا'; return; }
       if (password.length < 8) { errBox.textContent = 'كلمة المرور 8 أحرف على الأقل'; return; }
       const btn = node.querySelector('#nu-save');
       btn.disabled = true; btn.textContent = 'جارٍ إنشاء الحساب وتأكيد البريد…';

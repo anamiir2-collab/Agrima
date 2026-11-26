@@ -323,48 +323,60 @@
     return { deleted, failed };
   }
 
-  /* ================= السحب (Pull) ================= */
+  /* ================= السحب (Pull) =================
+     معالجة كل صفحة فور وصولها بدل تجميع الجدول كاملًا في الذاكرة.
+     هذا يقلل استهلاك الذاكرة وزمن الانتظار عند وجود آلاف الحركات والبكر،
+     مع الإبقاء على نفس قواعد التعارض وعظام القبر ومفاتيح السجلات المحلية. */
   async function pullStore(storeName, cfg, lastPullAt) {
     const sb = SB.client();
-    const remoteRows = [];
-    const RANGE = 1000;
-    let from = 0;
+    const RANGE = 500;
+    const tombs = await global.DB.getAllByIndexRange('tombstones', 'store', IDBKeyRange.only(storeName));
+    const deadSids = new Set(tombs.map((t) => t.sid));
+    const AUTO = new Set(['products', 'transactions', 'customers', 'rolls']);
+    let from = 0, appliedTotal = 0, conflictsTotal = 0, pushesTotal = 0;
+
     for (;;) {
-      let q = sb.from(cfg.table).select('*').order(cfg.orderBy, { ascending: true }).range(from, from + RANGE - 1);
+      let q = sb.from(cfg.table).select('*')
+        .order(cfg.orderBy, { ascending: true })
+        .range(from, from + RANGE - 1);
       if (lastPullAt && cfg.orderBy === 'updated_at') q = q.gt('updated_at', lastPullAt);
+
       const { data, error } = await q;
       if (error) throw error;
       if (!data || !data.length) break;
-      remoteRows.push(...data);
+
+      /* عظام القبر: السجلات المحذوفة محليًا لا تعود من السحابة */
+      const alive = data.filter((r) => r.sid && !deadSids.has(r.sid));
+      if (alive.length) {
+        const localRows = (await global.DB.getManyByIndex(storeName, 'sid', alive.map((r) => r.sid)))
+          .filter(Boolean);
+        const { apply, conflicts, pushes } = SYNC_CORE.mergePull(
+          localRows, alive, { dirtySids: new Set() }
+        );
+
+        if (apply.length) {
+          /* الحفاظ على المفتاح المحلي القائم لمتاجر autoIncrement */
+          const bySid = new Map(localRows.filter((r) => r.sid).map((r) => [r.sid, r]));
+          const toWrite = apply.map((r) => {
+            const row = cfg.toLocal(r);
+            const existing = bySid.get(r.sid);
+            if (existing && existing.id != null && AUTO.has(storeName)) row.id = existing.id;
+            row.syncedAt = nowISO();
+            return row;
+          });
+          await global.DB.bulkPut(storeName, toWrite);
+        }
+
+        appliedTotal += apply.length;
+        conflictsTotal += conflicts.length;
+        pushesTotal += pushes.length;
+      }
+
       if (data.length < RANGE) break;
       from += RANGE;
     }
-    if (!remoteRows.length) return { applied: 0, conflicts: 0 };
 
-    /* عظام القبر: السجلات المحذوفة محليًا لا تعود من السحابة */
-    const tombs = await global.DB.getAllByIndexRange('tombstones', 'store', IDBKeyRange.only(storeName));
-    const deadSids = new Set(tombs.map((t) => t.sid));
-    const alive = remoteRows.filter((r) => !deadSids.has(r.sid));
-
-    const localRows = (await global.DB.getManyByIndex(storeName, 'sid', alive.map((r) => r.sid)))
-      .filter(Boolean);
-    const { apply, conflicts, pushes } = SYNC_CORE.mergePull(localRows, alive, { dirtySids: new Set() });
-    if (apply.length) {
-      /* الصفوف السحابية تُخزن محليًا مع الحفاظ على مفتاحها المحلي القائم —
-         متاجر المفتاح التلقائي (autoIncrement) تحافظ على id الحالي،
-         ومتاجر UUID (reels/permits) مفتاحها هو sid نفسه */
-      const AUTO = new Set(['products', 'transactions', 'customers', 'rolls']);
-      const bySid = new Map(localRows.filter((r) => r.sid).map((r) => [r.sid, r]));
-      const toWrite = apply.map((r) => {
-        const row = cfg.toLocal(r);
-        const existing = bySid.get(r.sid);
-        if (existing && existing.id != null && AUTO.has(storeName)) row.id = existing.id;
-        row.syncedAt = nowISO();
-        return row;
-      });
-      await global.DB.bulkPut(storeName, toWrite);
-    }
-    return { applied: apply.length, conflicts: conflicts.length, pushes: pushes.length };
+    return { applied: appliedTotal, conflicts: conflictsTotal, pushes: pushesTotal };
   }
 
   /* ================= رصيد أمين المخزن (دوال تجميعية عبر RLS) ================= */

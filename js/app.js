@@ -1519,41 +1519,6 @@
     });
   }
 
-  /* مؤشر المزامنة في الشريط العلوي: الحالة + آخر مزامنة + ضغط = مزامنة الآن */
-  function wireSyncChip() {
-    const chip = document.getElementById('sync-chip');
-    if (!chip || !global.SYNC) return;
-    const txt = document.getElementById('sync-chip-txt');
-    const dot = document.getElementById('sync-chip-dot');
-    const paint = () => {
-      const s = global.SYNC.status;
-      const signed = global.PERM && global.PERM.signedIn();
-      if (!signed) { chip.hidden = true; return; }
-      chip.hidden = false;
-      const cls = s.state === 'syncing' ? 'sync-busy'
-        : s.state === 'error' ? 'sync-err'
-        : (!s.online || s.state === 'offline' || s.state === 'idle') ? 'sync-off'
-        : 'sync-ok';
-      chip.className = 'sync-chip ' + cls;
-      const ar = UI.getLang() === 'ar';
-      txt.textContent = s.state === 'syncing'
-        ? (s.progress && s.progress.total ? (ar ? `جارٍ المزامنة ${s.progress.completed}/${s.progress.total}` : `Syncing ${s.progress.completed}/${s.progress.total}`) : (ar ? 'جارٍ المزامنة…' : 'Syncing…'))
-        : s.state === 'error' ? (ar ? 'فشل المزامنة' : 'Sync failed')
-        : !s.online ? (ar ? 'غير متصل' : 'Offline')
-        : s.state === 'ok' ? (s.lastSync ? new Date(s.lastSync).toLocaleTimeString('en-GB') : (ar ? 'متماثلة' : 'Synced'))
-        : (ar ? 'جاهزة' : 'Ready');
-    };
-    chip.addEventListener('click', () => {
-      if (global.SYNC.status.state !== 'syncing') global.SYNC.run().catch(() => {});
-    });
-    try { UI.EventBus.on('sync-status', paint); } catch (e) { /* noop */ }
-    try { UI.EventBus.on('lang', paint); } catch (e2) { /* noop */ }
-    window.addEventListener('online', paint);
-    window.addEventListener('offline', paint);
-    paint();
-    setInterval(paint, 30000); /* تحديث الوقت المعروض */
-  }
-
   async function boot() {
     if (boot._started) return; /* prevent double initialization */
     boot._started = true;
@@ -1681,13 +1646,7 @@
         if (!settled) showBootError(watchdogMsg());
       }, 15000);
     };
-    if (global.AUTH) {
-      global.AUTH.on((evt) => {
-        if (evt && (evt.type === 'signed-in' || evt.type === 'local' || evt.type === 'blocked')) armWatchdog();
-      });
-    } else {
-      armWatchdog();
-    }
+    armWatchdog();
     boot().then(() => {
       settled = true;
       if (startupTimer) clearTimeout(startupTimer);

@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v12-incremental-sync-r2';
+const CACHE = 'agrima-v13-local-only';
 
 const PRECACHE = [
   './',
@@ -16,14 +16,11 @@ const PRECACHE = [
   './css/print.css',
   './js/calculations.js',
   './js/database.js',
-  './js/supabase.js',
   './js/permissions.js',
   './js/ui.js',
-  './js/auth.js',
   './js/transactions.js',
   './js/excel.js',
   './js/app.js',
-  './js/sync.js',
   './js/users.js',
   './js/rolls.js',
   './js/inventory.js',
@@ -34,7 +31,6 @@ const PRECACHE = [
   './js/backup.js',
   './vendor/xlsx.full.min.js',
   './vendor/chart.umd.min.js',
-  './vendor/supabase.js',
   './assets/icons/icon-192.png',
   './assets/icons/icon-512.png',
   './assets/icons/icon-maskable-192.png',

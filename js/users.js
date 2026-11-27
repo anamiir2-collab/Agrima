@@ -4,7 +4,7 @@
    • #users  (مدير النظام فقط): قائمة الحسابات، إضافة مستخدم بدور محدد
      (مدير / أمين مخزن)، تفعيل وإيقاف، تغيير الدور، إعادة تعيين كلمة
      المرور عبر البريد، آخر دخول، وسجل عمليات المستخدم.
-   • #audit  (مدير النظام فقط): سجل العمليات الموحد (السحابة + المحلي)
+   • #audit  (مدير النظام فقط): سجل العمليات المحلي
      بفلاتر بحث.
    • #sync   (مدير النظام فقط): حالة المزامنة والاتصال + مزامنة الآن.
    الحماية: الرواية الرسمية للدور في Supabase (profiles + RLS) —
@@ -301,8 +301,7 @@
     host.innerHTML = `
       <div class="page-head"><h2>سجل العمليات</h2>
         <div class="head-actions"><button class="btn btn-ghost" id="au-reload">تحديث</button></div></div>
-      <p class="muted small">سجل غير قابل للتعديل أو الحذف من أي مستخدم (لا توجد أي سياسة UPDATE أو DELETE في قاعدة البيانات).
-        يشمل: الدخول والخروج، أذون الصرف (إضافة/تعديل/حذف/اعتماد)، تغييرات المخزون، إدارة المستخدمين، والمزامنة.</p>
+      <p class="muted small">سجل محلي للعمليات المسجلة على هذا الجهاز.</p>
       <div class="card filters">
         <input type="text" id="au-q" placeholder="بحث في التفاصيل…">
         <select id="au-entity"><option value="">القسم: الكل</option>
@@ -319,20 +318,12 @@
     let all = [];
 
     async function load() {
-      const sb = SB.client();
-      const cloudPromise = sb ? sb.from('audit_logs').select('*').order('at', { ascending: false }).limit(1000) : Promise.resolve({ data: [] });
       const localRows = await global.DB.getAudit(2000);
-      const [cloudRes] = await Promise.all([cloudPromise]);
-      const cloud = (cloudRes.data || []).map((r) => ({
-        at: r.at, entity: r.entity, action: r.action, entityId: r.entity_id,
-        details: r.details || '', actorEmail: r.actor_email || '', origin: r.origin || 'cloud',
-      }));
-      const local = localRows.map((r) => ({
+      all = localRows.map((r) => ({
         at: r.at, entity: r.entity, action: r.action, entityId: r.entityId,
-        details: r.details || (r.after && !r.before ? 'إضافة' : ''), actorEmail: PERM.state.email || 'محلي', origin: 'local',
+        details: r.details || (r.after && !r.before ? 'إضافة' : ''),
+        actorEmail: 'محلي', origin: 'local',
       }));
-      const seen = new Set(cloud.map((r) => (r.at || '') + '|' + (r.action || '') + '|' + String(r.entityId == null ? '' : r.entityId)));
-      all = cloud.concat(local.filter((r) => !seen.has((r.at || '') + '|' + (r.action || '') + '|' + String(r.entityId == null ? '' : r.entityId))));
       all.sort((a, b) => (a.at < b.at ? 1 : -1));
       draw();
     }
@@ -349,14 +340,14 @@
         (!q || (r.details || '').toLowerCase().includes(q) || (r.actorEmail || '').toLowerCase().includes(q)));
       host.querySelector('#au-table').innerHTML = `
         <table class="data-table sticky-head">
-          <thead><tr><th>الوقت</th><th>المستخدم</th><th>العملية</th><th>القسم</th><th>التفاصيل</th><th>المصدر</th></tr></thead>
+          <thead><tr><th>الوقت</th><th>المستخدم</th><th>العملية</th><th>القسم</th><th>التفاصيل</th></tr></thead>
           <tbody>${rows.length ? rows.slice(0, 500).map((r) => `<tr>
             <td>${esc(r.at ? new Date(r.at).toLocaleString('en-GB') : '—')}</td>
             <td dir="ltr">${esc(r.actorEmail || '—')}</td>
             <td>${esc(r.action || '')}</td><td>${esc(r.entity || '')}</td>
             <td class="small">${esc(r.details || '')}</td>
-            <td><span class="badge ${r.origin === 'cloud' ? 'badge-approved' : 'badge-multi'}">${r.origin === 'cloud' ? 'سحابة' : 'جهاز'}</span></td>
-          </tr>`).join('') : `<tr><td colspan="6" class="empty">لا توجد عمليات مطابقة</td></tr>`}</tbody>
+            
+          </tr>`).join('') : `<tr><td colspan="5" class="empty">لا توجد عمليات مطابقة</td></tr>`}</tbody>
         </table>`;
     }
 
@@ -436,7 +427,5 @@
     });
   }
 
-  App.registerView('users', renderUsers);
-  App.registerView('audit', renderAudit);
-  App.registerView('sync', renderSync);
-})(window);
+    App.registerView('audit', renderAudit);
+  })(window);

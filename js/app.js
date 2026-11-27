@@ -1589,14 +1589,6 @@
       }).catch((e) => console.warn('[sw] registration failed', e));
     }
 
-    /* بوابة المصادقة: تُحدد الدور قبل تحميل أي بيانات — شاشة دخول كاملة
-       عند غياب الجلسة، واستعادة الجلسة المحفوظة عند وجودها (تعمل دون
-       إنترنت ببيانات الكاش). وضع محلي مؤقت إن كان الجهاز بلا اتصال. */
-    if (global.AUTH && global.PERM) {
-      setLoadingStatus(ar ? 'التحقق من الحساب…' : 'Checking your account…');
-      await global.AUTH.ensureSignedIn();
-    }
-
     setLoadingStatus(ar ? 'تحميل الأصناف والحركات…' : 'Loading products & movements…');
     document.querySelectorAll('.nav-item').forEach((n) => {
       n.addEventListener('click', (e) => { e.preventDefault(); navigate(n.dataset.route); });
@@ -1612,12 +1604,6 @@
     navigate((location.hash || '#dashboard').replace('#', ''));
     /* مهاجرات آمنة بعد أول عرض ناجح — لا تحجب التشغيل أبدًا */
     runSafeMigrations().catch((e) => console.warn('[migrations]', e));
-
-    /* حلقة المزامنة التلقائية + المؤشر العلوي (للمسجلين فقط) */
-    if (global.SYNC) {
-      global.SYNC.startAutoSync();
-      wireSyncChip();
-    }
 
     window.addEventListener('hashchange', () => {
       const r = location.hash.replace('#', '');

@@ -1,8 +1,0 @@
-# Supabase CLI project config — Agrima ERP
-# Used by `supabase functions deploy` (no local database/branches needed).
-project_id = "agrima-erp"
-
-[functions.admin-create-user]
-# صارم: أي طلب بلا JWT صالح لا يصل إلى الكود أصلًا — ثم تتحقق الدالة
-# بنفسها أن صاحب الجلسة مدير نظام نشط قبل استخدام أي صلاحية إدارية.
-verify_jwt = true

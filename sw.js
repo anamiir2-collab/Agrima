@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v14-reservation-report';
+const CACHE = 'agrima-v15-excel-sort';
 
 const PRECACHE = [
   './',

@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v13-local-only';
+const CACHE = 'agrima-v14-reservation-report';
 
 const PRECACHE = [
   './',

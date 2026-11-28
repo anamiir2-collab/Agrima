@@ -120,7 +120,11 @@
       global.alert(labels.noTable);
       return;
     }
-    const rows = app.reservationReportRows(customerKeys);
+    let rows = app.reservationReportRows(customerKeys);
+    const activeSort = app.reservationReportSort || {};
+    if (activeSort.field && typeof app.sortReservationReportRows === 'function') {
+      rows = app.sortReservationReportRows(rows, activeSort.field, activeSort.direction);
+    }
     if (!rows.length) { global.alert(labels.noItems); return; }
 
     refreshHeadingDate();

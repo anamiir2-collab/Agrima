@@ -120,7 +120,7 @@
     display: none !important;
   }
 
-  /* ===== الجدول الموحّد: 7 أعمدة بالضبط (عمود الإجراءات يُخفى) ===== */
+  /* ===== الجدول الموحّد: 5 أعمدة في الطباعة (عمود الإجراءات يُخفى) ===== */
   .resv-unified-table { font-size: 10px !important; }
   .resv-unified-table .resv-actions-col,
   .resv-unified-table td.actions-cell { display: none !important; }

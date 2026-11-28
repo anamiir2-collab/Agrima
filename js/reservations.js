@@ -419,6 +419,18 @@
     }), { qty: 0, count: 0 });
   }
 
+  /* قائمة ترتيب الأعمدة بأسلوب Excel */
+  function sortHeaderControl(field, label) {
+    const icon = '<span class="resv-sort-glyph" aria-hidden="true">⇅</span>';
+    return `<span class="resv-sort-wrap">
+      <button type="button" class="resv-sort-trigger" data-sort-toggle="${field}" title="${ar() ? 'ترتيب ' + label : 'Sort ' + label}" aria-label="${ar() ? 'ترتيب ' + label : 'Sort ' + label}">${icon}</button>
+      <span class="resv-sort-menu" data-sort-menu="${field}" hidden>
+        <button type="button" data-sort-choice="${field}:asc">${ar() ? 'من الأصغر إلى الأكبر' : 'Smallest to Largest'} <span>↑</span></button>
+        <button type="button" data-sort-choice="${field}:desc">${ar() ? 'من الأكبر إلى الأصغر' : 'Largest to Smallest'} <span>↓</span></button>
+      </span>
+    </span>`;
+  }
+
   /* باني الجدول الموحّد — نفس العنصر للشاشة والطباعة. عمود الإجراءات يظهر
      على الشاشة فقط ويُخفى عند الطباعة عبر css/print.css. */
   function unifiedTableHtml(rows, opts) {
@@ -442,7 +454,7 @@
     return `<table class="data-table resv-unified-table" id="rv-unified-table">
       <thead><tr>
         <th>${L.customer}</th><th>${L.type}</th>
-        <th class="num">${L.gsm}</th><th class="num">${L.size}</th>
+        <th class="num">${L.gsm}${withActions ? sortHeaderControl('gsm', L.gsm) : ''}</th><th class="num">${L.size}${withActions ? sortHeaderControl('size', L.size) : ''}</th>
         <th class="num">${L.qty}</th>
         ${withActions ? `<th class="resv-actions-col">${L.actions}</th>` : ''}
       </tr></thead>
@@ -567,6 +579,8 @@
     });
 
     let rows = [];
+    let sortBy = '';
+    let sortDirection = 'asc';
     function refreshRows() {
       rows = App.reservationReportRows(null);
       applyFilters();
@@ -583,6 +597,14 @@
         const hitNote = (x.voucherNos || []).some((v) => v.toLowerCase().includes(q));
         return hitCust || hitType || hitSize || hitNote;
       });
+      if (sortBy) {
+        const key = sortBy === 'size' ? 'size' : 'gsm';
+        filtered.sort((a, b) => {
+          const delta = (Number(a[key]) || 0) - (Number(b[key]) || 0);
+          return (sortDirection === 'desc' ? -delta : delta) ||
+            String(a.customer || '').localeCompare(String(b.customer || ''), 'ar');
+        });
+      }
       renderRows(filtered);
     }
 
@@ -590,6 +612,20 @@
     function renderRows(list) {
       const host2 = host.querySelector('#rv-table-host');
       host2.innerHTML = unifiedTableHtml(list, { actions: true });
+      host2.querySelectorAll('[data-sort-toggle]').forEach((button) => button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const field = button.dataset.sortToggle;
+        const menu = host2.querySelector(`[data-sort-menu="${field}"]`);
+        host2.querySelectorAll('[data-sort-menu]').forEach((item) => { if (item !== menu) item.hidden = true; });
+        menu.hidden = !menu.hidden;
+      }));
+      host2.querySelectorAll('[data-sort-choice]').forEach((button) => button.addEventListener('click', () => {
+        const [field, direction] = button.dataset.sortChoice.split(':');
+        sortBy = field;
+        sortDirection = direction;
+        applyFilters();
+      }));
+      host2.querySelectorAll('[data-open]')
       host2.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => { App.pendingReservationId = b.dataset.open; App.navigate('reservation-details'); }));
       host2.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => { App.pendingReservationEdit = b.dataset.edit; App.navigate('reservation-form'); }));
       host2.querySelectorAll('[data-trf]').forEach((b) => b.addEventListener('click', () => openTransferModal(b.dataset.trf, b.dataset.trfItem || null, () => refreshRows())));
@@ -599,7 +635,7 @@
     host.querySelector('#rv-q').addEventListener('input', applyFilters);
     host.querySelector('#rv-status').addEventListener('change', applyFilters);
     host.querySelector('#rv-clear').addEventListener('click', () => {
-      host.querySelector('#rv-q').value = ''; host.querySelector('#rv-status').value = ''; applyFilters();
+      host.querySelector('#rv-q').value = ''; host.querySelector('#rv-status').value = ''; sortBy = ''; sortDirection = 'asc'; applyFilters();
     });
     refreshRows();
   }

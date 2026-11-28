@@ -600,7 +600,7 @@
     function applyFilters() {
       const q = host.querySelector('#rv-q').value.trim().toLowerCase();
       const st = host.querySelector('#rv-status').value;
-      const filtered = rows.filter((x) => {
+      let filtered = rows.filter((x) => {
         if (st && x.status !== st) return false;
         if (!q) return true;
         const hitCust = String(x.customer || '').toLowerCase().includes(q);

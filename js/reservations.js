@@ -373,14 +373,11 @@
   /* ================= 3.5) الكشف الموحّد (شاشة + طباعة) =================
      جدول واحد، مصدر بيانات واحد، ودوال حساب واحدة — للشاشة والطباعة معًا.
      • كل بند حجز في صف مستقل بأعمدة ثابتة (اسم العميل / النوع / الجرام /
-       المقاس / عدد البكر / المتاح / المحمّل) وصف إجماليات في النهاية.
+       المقاس / عدد البكر) وصف إجماليات في النهاية.
      • الحجز الملغى بالكامل لا يظهر إطلاقًا (في الجدول ولا في الطباعة).
      • عدد البكر  = المطلوب − الملغى (الإلغاء الجزئي يعدّل الرقم نفسه،
        والكمية المحوّلة تبقى في عدد البكر للعميل صاحب الحجز الأصلي —
        لا تُنشأ صفوف إضافية للعميل المستلم حتى لا تتضاعف الإجماليات).
-     • المتاح    = التخصيص الفعلي من الرصيد الحي (محرك القائم FCFS كما هو).
-     • المحمّل   = المحمّل فعليًا عبر أذون صرف مرتبطة + تحميل الكميات
-       المحوّلة إذا حُمّلت فعليًا فقط — الكمية المحوّلة غير المحمّلة لا تُحسب.
      لا حسابات جديدة ولا نسخة طباعة مستقلة: الطباعة تعيد استخدام نفس الدوال
      ونفس عنصر الجدول المعروض على الشاشة. */
   function reservationReportRows(customerKeys) {
@@ -418,26 +415,22 @@
   function reservationReportTotals(rows) {
     return (rows || []).reduce((acc, x) => ({
       qty: CALC.round6(acc.qty + (Number(x.qty) || 0)),
-      available: CALC.round6(acc.available + (Number(x.available) || 0)),
-      loaded: CALC.round6(acc.loaded + (Number(x.loaded) || 0)),
       count: acc.count + 1,
-    }), { qty: 0, available: 0, loaded: 0, count: 0 });
+    }), { qty: 0, count: 0 });
   }
 
   /* باني الجدول الموحّد — نفس العنصر للشاشة والطباعة. عمود الإجراءات يظهر
-     على الشاشة فقط ويُخفى عند الطباعة عبر css/print.css (أعمدة الطباعة = 7) */
+     على الشاشة فقط ويُخفى عند الطباعة عبر css/print.css. */
   function unifiedTableHtml(rows, opts) {
     const withActions = !opts || opts.actions !== false;
     const totals = reservationReportTotals(rows);
-    const cols = withActions ? 8 : 7;
+    const cols = withActions ? 6 : 5;
     const L = {
       customer: ar() ? 'اسم العميل' : 'Customer',
       type: ar() ? 'النوع' : 'Type',
       gsm: ar() ? 'الجرام' : 'GSM',
       size: ar() ? 'المقاس' : 'Size',
       qty: ar() ? 'عدد البكر' : 'Reels',
-      available: ar() ? 'المتاح' : 'Available',
-      loaded: ar() ? 'المحمّل' : 'Loaded',
       actions: t('actions'),
       total: ar() ? 'الإجمالي' : 'Total',
       items: ar() ? 'بند' : 'items',
@@ -450,7 +443,7 @@
       <thead><tr>
         <th>${L.customer}</th><th>${L.type}</th>
         <th class="num">${L.gsm}</th><th class="num">${L.size}</th>
-        <th class="num">${L.qty}</th><th class="num">${L.available}</th><th class="num">${L.loaded}</th>
+        <th class="num">${L.qty}</th>
         ${withActions ? `<th class="resv-actions-col">${L.actions}</th>` : ''}
       </tr></thead>
       <tbody>${(rows || []).length ? rows.map((x) => `
@@ -460,8 +453,6 @@
           <td class="num" data-label="${L.gsm}">${fmtNum(x.gsm)}</td>
           <td class="num" data-label="${L.size}">${fmtNum(x.size)}</td>
           <td class="num" data-label="${L.qty}">${fmtNum(x.qty)}</td>
-          <td class="num pos" data-label="${L.available}">${fmtNum(x.available)}</td>
-          <td class="num" data-label="${L.loaded}">${fmtNum(x.loaded)}</td>
           ${withActions ? `<td class="actions-cell">
             <button class="icon-btn" data-open="${esc(x.reservationId)}" title="${L.details}">👁</button>
             <button class="icon-btn" data-trf="${esc(x.reservationId)}" data-trf-item="${esc(x.itemId || '')}" title="${L.trf}">⇄</button>
@@ -472,8 +463,6 @@
       <tfoot><tr>
         <td colspan="4">${L.total} (${fmtNum(totals.count)} ${L.items})</td>
         <td class="num">${fmtNum(totals.qty)}</td>
-        <td class="num">${fmtNum(totals.available)}</td>
-        <td class="num">${fmtNum(totals.loaded)}</td>
         ${withActions ? '<td></td>' : ''}
       </tr></tfoot>
     </table>`;

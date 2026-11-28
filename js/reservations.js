@@ -625,7 +625,6 @@
         sortDirection = direction;
         applyFilters();
       }));
-      host2.querySelectorAll('[data-open]')
       host2.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => { App.pendingReservationId = b.dataset.open; App.navigate('reservation-details'); }));
       host2.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => { App.pendingReservationEdit = b.dataset.edit; App.navigate('reservation-form'); }));
       host2.querySelectorAll('[data-trf]').forEach((b) => b.addEventListener('click', () => openTransferModal(b.dataset.trf, b.dataset.trfItem || null, () => refreshRows())));

@@ -419,6 +419,17 @@
     }), { qty: 0, count: 0 });
   }
 
+  /* ترتيب رقمي لصفوف الكشف فقط — لا يغيّر البيانات الأصلية. */
+  function sortReservationReportRows(rows, field, direction) {
+    if (field !== 'size' && field !== 'gsm') return (rows || []).slice();
+    const key = field;
+    return (rows || []).slice().sort((a, b) => {
+      const delta = (Number(a[key]) || 0) - (Number(b[key]) || 0);
+      return (direction === 'desc' ? -delta : delta) ||
+        String(a.customer || '').localeCompare(String(b.customer || ''), 'ar');
+    });
+  }
+
   /* قائمة ترتيب الأعمدة بأسلوب Excel */
   function sortHeaderControl(field, label) {
     const icon = '<span class="resv-sort-glyph" aria-hidden="true">⇅</span>';
@@ -480,6 +491,7 @@
     </table>`;
   }
   App.reservationReportRows = reservationReportRows;
+  App.sortReservationReportRows = sortReservationReportRows;
   App.reservationReportTotals = reservationReportTotals;
   App.renderResvUnifiedTable = unifiedTableHtml;
 
@@ -597,14 +609,8 @@
         const hitNote = (x.voucherNos || []).some((v) => v.toLowerCase().includes(q));
         return hitCust || hitType || hitSize || hitNote;
       });
-      if (sortBy) {
-        const key = sortBy === 'size' ? 'size' : 'gsm';
-        filtered.sort((a, b) => {
-          const delta = (Number(a[key]) || 0) - (Number(b[key]) || 0);
-          return (sortDirection === 'desc' ? -delta : delta) ||
-            String(a.customer || '').localeCompare(String(b.customer || ''), 'ar');
-        });
-      }
+      App.reservationReportSort = { field: sortBy, direction: sortDirection };
+      if (sortBy) filtered = sortReservationReportRows(filtered, sortBy, sortDirection);
       renderRows(filtered);
     }
 

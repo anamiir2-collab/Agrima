@@ -6,7 +6,7 @@
    ========================================================================= */
 'use strict';
 
-const CACHE = 'agrima-v16-excel-sort-print';
+const CACHE = 'agrima-v17-excel-sort-fix';
 
 const PRECACHE = [
   './',
